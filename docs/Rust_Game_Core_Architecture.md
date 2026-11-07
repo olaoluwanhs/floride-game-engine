@@ -49,19 +49,19 @@ This document specifies **only the Rust core repository**. It describes its modu
 
 ## 3. What belongs in the core, and what does not
 
-| The Rust core owns | The application / renderer owns |
-|---|---|
-| World simulation and entities | 3D drawing, shaders and lighting |
-| Collision and character movement via physics adapter | Loading meshes and textures onto GPU |
-| Health, damage and death rules | First-person camera presentation and visual effects |
-| Weapons, magazines, reload timing, projectiles and hitscan rules | Weapon models, muzzle flashes, bullet tracers |
-| Enemy decision-making and combat behavior | Skeletal animation playback and blending |
-| Survival waves, scores and difficulty rules | HUD, settings screens and menus |
-| Story missions, triggers and objective progress | Dialog windows, subtitles and cutscene presentation |
-| Inventory, ammunition and gameplay pickups | Touch, controller, keyboard and mouse collection |
-| Simulation events (`ShotFired`, `EnemyKilled`, etc.) | Playing sounds, vibrations and particle effects |
-| Save/load game data and version checks | File dialogs, platform storage permissions and cloud saves |
-| Game-state snapshots for applications | Interpolating and displaying those snapshots |
+| The Rust core owns                                               | The application / renderer owns                            |
+| ---------------------------------------------------------------- | ---------------------------------------------------------- |
+| World simulation and entities                                    | 3D drawing, shaders and lighting                           |
+| Collision and character movement via physics adapter             | Loading meshes and textures onto GPU                       |
+| Health, damage and death rules                                   | First-person camera presentation and visual effects        |
+| Weapons, magazines, reload timing, projectiles and hitscan rules | Weapon models, muzzle flashes, bullet tracers              |
+| Enemy decision-making and combat behavior                        | Skeletal animation playback and blending                   |
+| Survival waves, scores and difficulty rules                      | HUD, settings screens and menus                            |
+| Story missions, triggers and objective progress                  | Dialog windows, subtitles and cutscene presentation        |
+| Inventory, ammunition and gameplay pickups                       | Touch, controller, keyboard and mouse collection           |
+| Simulation events (`ShotFired`, `EnemyKilled`, etc.)             | Playing sounds, vibrations and particle effects            |
+| Save/load game data and version checks                           | File dialogs, platform storage permissions and cloud saves |
+| Game-state snapshots for applications                            | Interpolating and displaying those snapshots               |
 
 **Important boundary:** The Rust core can expose a logical aim direction and character orientation. A renderer decides exactly how the camera moves, whether it shakes, and which animation looks best. The core must never read a browser DOM event or mobile touch event directly.
 
@@ -150,7 +150,8 @@ game-core/
 │       ├── src/lib.rs
 │       └── include/game_core.h # Generated or checked C header
 ├── examples/
-│   └── headless-demo/          # Small CLI for exercising the game
+│   ├── headless-demo/          # Small CLI for exercising the game without graphics
+│   └── visual-demo/            # Optional local window for seeing and controlling the simulation
 ├── tests/                      # Cross-crate behavior/compatibility tests
 ├── benches/                    # Performance benchmarks when needed
 ├── docs/
@@ -172,8 +173,9 @@ game-core/
 - **`game`:** Implements the actual gameplay. It is not specific to an engine or rendering technology.
 - **`bindings-wasm`:** Converts browser-facing calls and buffers into calls to `game`.
 - **`bindings-native`:** Exposes a simple native interface usable by C/C++, C#, JSI or engine extensions.
+- **`visual-demo`:** A small development-only executable that sends commands to the core and draws returned snapshots. Its windowing/rendering dependency belongs only to this example, never to `game` or the public library API.
 
-**Keep the initial setup manageable:** It is acceptable to start with `game-types`, `physics-api`, `physics-rapier`, `game`, and `examples/headless-demo`. Add WASM and native bindings **after** the headless simulation runs. Do not create dozens of empty modules just to match the eventual tree.
+**Keep the initial setup manageable:** Start with `game-types`, `physics-api`, `physics-rapier`, `game`, and `examples/headless-demo`. Add `examples/visual-demo` when the runtime can accept commands and provide snapshots (Milestone 2). Add WASM and native bindings **after** the headless simulation runs. Do not create dozens of empty modules just to match the eventual tree.
 
 ### Dependency rule
 
@@ -185,6 +187,7 @@ game ---------------------> game-types + physics-api
 bindings-wasm ------------> game (+ physics-rapier to construct the runtime)
 bindings-native ----------> game (+ physics-rapier to construct the runtime)
 headless-demo ------------> game (+ physics-rapier)
+visual-demo --------------> game + physics-rapier + chosen renderer (example only)
 ```
 
 If factory creation becomes repetitive, introduce a small `game-defaults` crate later to assemble the game with Rapier. **Do not make the `game` crate import Rapier just for convenience.**
@@ -740,6 +743,12 @@ Run whole scenarios without any graphics:
 5. Start survival mode, clear a wave and verify progression.
 6. Save and restore supported state.
 
+### Visual development demo
+
+The optional `examples/visual-demo` is a small interactive host for learning and manual smoke testing. It should read game snapshots and draw a simple scene (for example, basic shapes for the player, floor and walls), convert keyboard input into normalized game commands, and advance the core using fixed ticks. It must not decide collisions, damage or any other authoritative gameplay behavior. This demo makes behavior visible but does not replace automated unit, physics-adapter or headless integration tests.
+
+Keep its windowing and rendering dependency isolated to the demo package. Macroquad is a candidate for this small Rust host; confirm the choice and current APIs when implementing the demo rather than adding a renderer dependency to the core crates.
+
 ### Cross-platform/API tests
 
 - WASM creates a game and produces readable snapshot bytes.
@@ -790,8 +799,9 @@ These are intended quality gates; adjust feature/target combinations if WASM-onl
 - Add commands, fixed ticks, stable entity IDs and event queue.
 - Produce structured game snapshots.
 - Add a test that runs thousands of simulation ticks without a renderer.
+- Add the optional `examples/visual-demo` binary as a separate host. Show a simple level and player from snapshots, map basic keyboard controls to game commands, and advance the simulation at its fixed rate.
 
-**Done when:** External code can drive the game entirely through the public Rust API.
+**Done when:** External code can drive the game entirely through the public Rust API; the visual demo can display and control a simple simulation without adding rendering dependencies to the core.
 
 ### Milestone 3 — First weapon and enemy
 
@@ -809,7 +819,7 @@ These are intended quality gates; adjust feature/target combinations if WASM-onl
 
 **Done when:** An entire basic survival round can be simulated without graphics.
 
-### Milestone 5 — WASM adapter (first real rendering integration)
+### Milestone 5 — WASM adapter (first external rendering integration)
 
 - Add browser-facing wrapper and binary snapshot format.
 - Make a tiny JavaScript/WASM consumer example or contract test.
@@ -849,18 +859,18 @@ Only after single-player is solid: investigate authoritative server reuse, tick/
 
 These are not settled, and agents must **not invent a permanent answer without evidence**:
 
-| Decision | Default for now | When to revisit |
-|---|---|---|
-| Entity framework | Plain Rust structs/collections | When scale/complexity warrants ECS |
-| Physics engine | Rapier 3D behind an interface | After tests show an actual limitation |
-| Physics precision | `f32` | If large worlds or accuracy require more |
-| Runtime timestep | 60 Hz | After device profiling and gameplay testing |
-| WASM exchange | TypedArray-compatible binary buffers | If snapshot transfer becomes a bottleneck |
-| Mobile transport | C ABI with JSI-capable wrapper later | After native benchmark/prototype |
-| Multiplayer transport | Not implemented in Stage 1 | Stage 2 network prototypes |
-| Pathfinding | Simple test-level navigation | When maps become more complex |
-| Game data authoring | Small validated data files | As level/story authoring grows |
-| Animation | Output animation state IDs only | When a renderer has a concrete animation pipeline |
+| Decision              | Default for now                      | When to revisit                                   |
+| --------------------- | ------------------------------------ | ------------------------------------------------- |
+| Entity framework      | Plain Rust structs/collections       | When scale/complexity warrants ECS                |
+| Physics engine        | Rapier 3D behind an interface        | After tests show an actual limitation             |
+| Physics precision     | `f32`                                | If large worlds or accuracy require more          |
+| Runtime timestep      | 60 Hz                                | After device profiling and gameplay testing       |
+| WASM exchange         | TypedArray-compatible binary buffers | If snapshot transfer becomes a bottleneck         |
+| Mobile transport      | C ABI with JSI-capable wrapper later | After native benchmark/prototype                  |
+| Multiplayer transport | Not implemented in Stage 1           | Stage 2 network prototypes                        |
+| Pathfinding           | Simple test-level navigation         | When maps become more complex                     |
+| Game data authoring   | Small validated data files           | As level/story authoring grows                    |
+| Animation             | Output animation state IDs only      | When a renderer has a concrete animation pipeline |
 
 ---
 
