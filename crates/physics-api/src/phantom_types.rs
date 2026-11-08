@@ -23,7 +23,7 @@ pub enum PhantomBehavior {
 /// or respond to physical forces. Its behavior decides whether it detects
 /// overlaps, raycasts, or both. Every phantom has an entity ID so the game can
 /// tell which object caused an interaction.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhantomColliderDesc {
     /// The game-owned ID reported when this phantom is detected.
     pub entity_id: EntityId,
@@ -60,7 +60,7 @@ pub struct PhantomRayHit {
 #[cfg(test)]
 mod tests {
     use super::{PhantomBehavior, PhantomColliderDesc};
-    use crate::{PhysicsTransform, PrimitiveShape};
+    use crate::{HeightFieldDesc, PhysicsTransform, PrimitiveShape};
     use game_types::{EntityId, Vec3};
 
     #[test]
@@ -79,5 +79,23 @@ mod tests {
             PhantomBehavior::OverlapSensorAndRaycastTarget
         );
         assert_eq!(phantom.transform.position, Vec3::ZERO);
+    }
+
+    #[test]
+    fn phantom_can_use_a_heightfield_shape() {
+        let phantom = PhantomColliderDesc {
+            entity_id: EntityId::new(32),
+            transform: PhysicsTransform::IDENTITY,
+            shape: PrimitiveShape::HeightField(HeightFieldDesc {
+                rows: 2,
+                columns: 2,
+                height_samples: vec![0.0, 1.0, 1.0, 0.0],
+                cell_size_x: 1.0,
+                cell_size_z: 1.0,
+            }),
+            behavior: PhantomBehavior::OverlapSensor,
+        };
+
+        assert!(matches!(phantom.shape, PrimitiveShape::HeightField(_)));
     }
 }

@@ -36,13 +36,13 @@ impl PhysicsHandle {
 ///
 /// Give the collider an entity ID when game logic may need to identify it,
 /// such as when it can take damage or break. Anonymous scenery can use `None`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StaticColliderDesc {
     /// The game-owned ID, or `None` when the collider is anonymous scenery.
     pub entity_id: Option<EntityId>,
     /// The shape's position and orientation in the world.
     pub transform: PhysicsTransform,
-    /// The collision shape used for this immovable object.
+    /// The collision shape used for this object.
     pub shape: PrimitiveShape,
 }
 
@@ -53,7 +53,7 @@ pub struct StaticColliderDesc {
 /// it during each call to `step`. Mass is measured in kilograms. Friction must
 /// be zero or greater; elasticity (bounciness) must be between zero and one.
 /// All numeric values must be finite.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DynamicBodyDesc {
     /// The game-owned ID used to refer to this object in ray hits and events.
     pub entity_id: EntityId,
@@ -77,7 +77,7 @@ pub struct DynamicBodyDesc {
 /// implementation uses the selected shape for collision-aware character motion.
 /// A capsule is a common choice for a player because its rounded ends move
 /// smoothly over floors and small obstacles. The slope limit is in radians.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CharacterDesc {
     /// The game-owned ID used to identify this character in ray hits.
     pub entity_id: EntityId,
@@ -136,8 +136,10 @@ pub struct RayHit {
 
 #[cfg(test)]
 mod tests {
-    use super::{DynamicBodyDesc, PhysicsHandle, StaticColliderDesc};
-    use crate::{PhysicsTransform, PrimitiveShape, Quaternion};
+    use super::{CharacterDesc, DynamicBodyDesc, PhysicsHandle};
+    use crate::{
+        HeightFieldDesc, PhysicsTransform, PrimitiveShape, Quaternion, StaticColliderDesc,
+    };
     use game_types::{EntityId, Vec3};
 
     #[test]
@@ -179,6 +181,35 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_body_and_character_can_use_heightfield_shapes() {
+        let heightfield = HeightFieldDesc {
+            rows: 2,
+            columns: 2,
+            height_samples: vec![0.0, 1.0, 1.0, 0.0],
+            cell_size_x: 1.0,
+            cell_size_z: 1.0,
+        };
+        let dynamic_body = DynamicBodyDesc {
+            entity_id: EntityId::new(8),
+            transform: PhysicsTransform::IDENTITY,
+            shape: PrimitiveShape::HeightField(heightfield.clone()),
+            mass_kg: 2.0,
+            friction: 0.5,
+            elasticity: 0.1,
+        };
+        let character = CharacterDesc {
+            entity_id: EntityId::new(9),
+            position: Vec3::ZERO,
+            shape: PrimitiveShape::HeightField(heightfield),
+            max_slope_angle_radians: 0.8,
+            step_height: 0.25,
+        };
+
+        assert!(matches!(dynamic_body.shape, PrimitiveShape::HeightField(_)));
+        assert!(matches!(character.shape, PrimitiveShape::HeightField(_)));
+    }
+
+    #[test]
     fn static_collider_description_keeps_its_entity_id() {
         let barrier_id = EntityId::new(21);
         let barrier = StaticColliderDesc {
@@ -190,5 +221,52 @@ mod tests {
         };
 
         assert_eq!(barrier.entity_id, Some(barrier_id));
+    }
+
+    #[test]
+    fn static_collider_can_use_a_heightfield_shape() {
+        let ground = StaticColliderDesc {
+            entity_id: None,
+            transform: PhysicsTransform::IDENTITY,
+            shape: PrimitiveShape::HeightField(HeightFieldDesc {
+                rows: 2,
+                columns: 2,
+                height_samples: vec![0.0, 1.0, 1.0, 0.0],
+                cell_size_x: 1.0,
+                cell_size_z: 1.0,
+            }),
+        };
+
+        assert!(matches!(ground.shape, PrimitiveShape::HeightField(_)));
+    }
+
+    #[test]
+    fn static_collider_can_use_a_plane_primitive() {
+        let ground = StaticColliderDesc {
+            entity_id: None,
+            transform: PhysicsTransform::IDENTITY,
+            shape: PrimitiveShape::Plane {
+                half_extents: Some(crate::PlaneHalfExtents {
+                    half_width_x: 5.0,
+                    half_depth_z: 3.0,
+                }),
+            },
+        };
+
+        assert_eq!(ground.transform.position, Vec3::ZERO);
+    }
+
+    #[test]
+    fn static_collider_can_use_an_infinite_plane() {
+        let ground = StaticColliderDesc {
+            entity_id: None,
+            transform: PhysicsTransform::IDENTITY,
+            shape: PrimitiveShape::Plane { half_extents: None },
+        };
+
+        assert!(matches!(
+            ground.shape,
+            PrimitiveShape::Plane { half_extents: None }
+        ));
     }
 }

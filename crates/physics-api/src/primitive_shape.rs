@@ -1,15 +1,30 @@
 use game_types::Vec3;
 
-/// A basic collision shape that can be shared by different kinds of physics objects.
+use crate::height_field_type::HeightFieldDesc;
+
+/// Half-width and half-depth for a finite plane.
+///
+/// The plane itself lies in the local XZ plane, so it has no Y extent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlaneHalfExtents {
+    /// Distance from the plane's center to its edge along local X, in meters.
+    pub half_width_x: f32,
+    /// Distance from the plane's center to its edge along local Z, in meters.
+    pub half_depth_z: f32,
+}
+
+/// A collision shape that can be shared by different kinds of physics objects.
 ///
 /// The dimensions describe the shape in its own local space. The object's
 /// `PhysicsTransform` places and rotates that shape in the world. The physics
-/// implementation must check that every dimension is positive and finite.
+/// implementation must check that dimensions are positive and finite. A
+/// heightfield contains owned sample data, so shapes and descriptions that
+/// contain one can be cloned but cannot be copied implicitly.
 ///
 /// A torus is included as a useful game shape, but it may need to be
 /// approximated by several simpler colliders when a physics engine does not
 /// support it directly. That engine-specific choice belongs in the adapter.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PrimitiveShape {
     /// A box. Each value is the distance from its center to one side.
     ///
@@ -19,6 +34,16 @@ pub enum PrimitiveShape {
 
     /// A ball described by its radius.
     Sphere { radius: f32 },
+
+    /// A flat surface through the shape's local origin.
+    ///
+    /// The surface lies in the local XZ plane and faces positive Y. Set
+    /// `half_extents` to `None` for an infinite plane, or to `Some(...)` for a
+    /// finite rectangle. The object's transform places and rotates the plane.
+    /// Finite half-extents must be positive and finite.
+    Plane {
+        half_extents: Option<PlaneHalfExtents>,
+    },
 
     /// A cylinder whose central axis is the shape's local Y axis.
     ///
@@ -39,4 +64,11 @@ pub enum PrimitiveShape {
     /// hole in the middle, `major_radius` must be greater than `tube_radius`.
     /// The physics adapter will choose how to represent this shape in its engine.
     Torus { major_radius: f32, tube_radius: f32 },
+
+    /// A grid of heights that describes an uneven surface.
+    ///
+    /// Heightfields can be requested for static objects, movable bodies,
+    /// characters, or phantoms through this shared shape type. The physics
+    /// adapter decides which uses its engine supports.
+    HeightField(HeightFieldDesc),
 }

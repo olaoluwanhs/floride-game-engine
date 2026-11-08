@@ -4,6 +4,7 @@
 //! perform physics itself and does not depend on Rapier or another engine.
 
 mod error;
+mod height_field_type;
 mod phantom_types;
 mod physics_types;
 mod primitive_shape;
@@ -11,11 +12,12 @@ mod shared_types;
 mod world;
 
 pub use error::PhysicsError;
+pub use height_field_type::HeightFieldDesc;
 pub use phantom_types::{PhantomBehavior, PhantomColliderDesc, PhantomOverlap, PhantomRayHit};
 pub use physics_types::{
     CharacterDesc, CharacterMoveResult, DynamicBodyDesc, PhysicsHandle, RayHit, RayQuery,
     StaticColliderDesc,
 };
-pub use primitive_shape::PrimitiveShape;
+pub use primitive_shape::{PlaneHalfExtents, PrimitiveShape};
 pub use shared_types::{PhysicsTransform, Quaternion};
 pub use world::PhysicsWorld;
