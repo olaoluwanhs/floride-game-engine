@@ -15,6 +15,10 @@ Build the Rust game core in a way that is technically sound and helps the develo
 
 ## Learning is part of the deliverable
 
+- Assume the developer is comfortable with TypeScript but is still learning Rust. Write code so a Rust beginner can follow it; do not rely on familiarity with Rust idioms.
+- Prefer descriptive names and straightforward, step-by-step code over compact or clever code. Do not optimize for fewer lines or performance without a demonstrated need.
+- When a named method or intermediate variable makes the behavior clearer than operator overloading or a chained expression, use the clearer form. Avoid advanced abstractions unless the feature needs them.
+- When introducing Rust syntax or concepts, explain their role in the code in plain language. TypeScript comparisons can help, but point out important differences rather than implying the languages behave the same.
 - Separate advice from action. If the user asks what to do, how to start, or asks only to plan, compare options, or understand a concept, give clear next steps and stop; do not edit files or run setup commands.
 - Before any file edit or state-changing project command, explain in plain language exactly what will change or run, why, and how it will be checked. Then wait for the user's explicit go-ahead.
 - Do not treat general permission to use the terminal, an earlier request, or the act of asking for a plan as approval for a specific action. If the user wants to do the work themselves, provide commands and explanations without executing them.

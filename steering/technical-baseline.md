@@ -11,6 +11,8 @@ This is a compact summary, not a replacement for `docs/Rust_Game_Core_Architectu
 ## Rust style
 
 - Use ordinary Rust composition: structs hold related data, enums represent a known set of states, and functions implement behavior.
+- Keep early code beginner-readable: use descriptive names, explicit intermediate values, and straightforward control flow. Do not make code shorter or more optimized at the cost of clarity.
+- Prefer named operations over operator overloading or dense method chains when the named form makes the behavior easier to understand. Explain unfamiliar Rust features where they are introduced.
 - Use traits where they define a real boundary, especially the replaceable physics interface. Avoid object-oriented inheritance and avoid forcing a purely functional style.
 - Start with plain structs and collections, not a full ECS. Add a larger framework only when real project needs justify it.
 - Keep common game types independent of Rapier and rendering technology.

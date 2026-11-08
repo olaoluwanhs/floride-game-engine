@@ -242,6 +242,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "physics-api"
+version = "0.1.0"
+dependencies = [
+ "game-types",
+]
+
+[[package]]
 name = "png"
 version = "0.17.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"

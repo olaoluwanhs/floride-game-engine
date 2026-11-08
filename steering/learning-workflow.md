@@ -24,9 +24,11 @@ Do not edit until the user has approved the proposed implementation after hearin
 ## While implementing
 
 - Work in small changes that can be understood and checked independently.
+- Treat the developer as experienced with TypeScript and new to Rust. Explain unfamiliar Rust concepts such as ownership, borrowing, traits, generics, and lifetimes in the context where they appear. Use TypeScript comparisons when helpful, and mention where the comparison stops being accurate.
+- Use descriptive names and show the steps in the logic. Prefer named methods and intermediate variables over operator overloading, dense expressions, or long method chains when those forms make the behavior less clear.
 - Prefer existing project patterns and standard commands. Explain a command's purpose when it is unfamiliar; do not replace a simple Cargo command with generated code.
 - For inline suggestions, provide a focused expression, branch, method, or test. Keep nearby context intact and avoid rewriting unrelated code.
-- Add simple comments where they teach the reason for a decision, clarify a non-obvious sequence, or explain a domain rule. Public APIs may need `///` documentation. Do not narrate every obvious line.
+- Add comments where they explain a decision, domain rule, or Rust concept that is not clear from the code. Public APIs may need `///` documentation. Do not narrate every obvious line or use comments as a substitute for clear names.
 - When the behavior is not yet known, state a small hypothesis and use a focused check to test it.
 
 ## After a change
