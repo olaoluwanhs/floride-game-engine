@@ -92,6 +92,7 @@ mod tests {
                 height_samples: vec![0.0, 1.0, 1.0, 0.0],
                 cell_size_x: 1.0,
                 cell_size_z: 1.0,
+                thickness: None,
             }),
             behavior: PhantomBehavior::OverlapSensor,
         };

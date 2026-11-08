@@ -5,6 +5,10 @@
 /// each consecutive group of `columns` values describes one row. Every sample
 /// is a height in meters along local Y.
 ///
+/// `thickness` optionally closes the surface downward along local Y. When set,
+/// it must be positive and finite. This creates a solid collision shape with
+/// the sampled surface on top, plus an underside and sides.
+///
 /// A valid heightfield needs at least two rows and two columns, exactly
 /// `rows * columns` finite height samples, and positive finite spacing values.
 /// Whether a physics engine supports this shape in a particular object type is
@@ -21,6 +25,11 @@ pub struct HeightFieldDesc {
     pub cell_size_x: f32,
     /// Distance in meters between neighboring rows.
     pub cell_size_z: f32,
+    /// Optional solid thickness extending downward from the sampled surface.
+    ///
+    /// `None` keeps this as a surface. `Some(value)` requires a positive,
+    /// finite value in meters.
+    pub thickness: Option<f32>,
 }
 
 impl HeightFieldDesc {
@@ -42,6 +51,7 @@ mod tests {
             height_samples: vec![0.0; 12],
             cell_size_x: 2.0,
             cell_size_z: 2.0,
+            thickness: None,
         };
 
         assert_eq!(heightfield.expected_sample_count(), Some(12));

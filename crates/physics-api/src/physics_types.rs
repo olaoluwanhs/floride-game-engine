@@ -188,6 +188,7 @@ mod tests {
             height_samples: vec![0.0, 1.0, 1.0, 0.0],
             cell_size_x: 1.0,
             cell_size_z: 1.0,
+            thickness: Some(0.25),
         };
         let dynamic_body = DynamicBodyDesc {
             entity_id: EntityId::new(8),
@@ -205,7 +206,13 @@ mod tests {
             step_height: 0.25,
         };
 
-        assert!(matches!(dynamic_body.shape, PrimitiveShape::HeightField(_)));
+        assert!(matches!(
+            dynamic_body.shape,
+            PrimitiveShape::HeightField(HeightFieldDesc {
+                thickness: Some(0.25),
+                ..
+            })
+        ));
         assert!(matches!(character.shape, PrimitiveShape::HeightField(_)));
     }
 
@@ -234,6 +241,7 @@ mod tests {
                 height_samples: vec![0.0, 1.0, 1.0, 0.0],
                 cell_size_x: 1.0,
                 cell_size_z: 1.0,
+                thickness: None,
             }),
         };
 
