@@ -34,6 +34,13 @@ pub trait PhysicsWorld {
         description: &PhantomColliderDesc,
     ) -> Result<PhysicsHandle, PhysicsError>;
 
+    /// Moves or rotates a phantom collider without making it physically solid.
+    fn set_phantom_transform(
+        &mut self,
+        phantom_handle: PhysicsHandle,
+        transform: &PhysicsTransform,
+    ) -> Result<(), PhysicsError>;
+
     /// Removes a phantom collider previously added to this world.
     fn remove_phantom_collider(
         &mut self,

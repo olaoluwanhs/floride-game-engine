@@ -129,6 +129,61 @@ pub(super) fn move_character(
     let applied_displacement = movement.translation;
     let is_grounded = movement.grounded;
 
+    // A Rapier kinematic character controller does not automatically push
+    // dynamic bodies. Only bodies within a small contact tolerance of the
+    // character's post-controller position can receive an impulse.
+    let requested = conversions::to_vector(desired_displacement);
+    let mut horizontal_requested = requested;
+    horizontal_requested.y = 0.0;
+    if collided && horizontal_requested.length_squared() > f32::EPSILON {
+        let push_direction = horizontal_requested.normalize();
+        let push_speed = 2.5_f32;
+        let next_position =
+            Pose::from_translation(character_body.translation() + applied_displacement);
+        let character_aabb = character_collider.shape().compute_aabb(&next_position);
+        for (_other_collider, collider) in world.colliders.iter() {
+            let Some(body_handle) = collider.parent() else {
+                continue;
+            };
+            let dynamic_aabb = collider.shape().compute_aabb(collider.position());
+            let gap_x = if character_aabb.maxs.x < dynamic_aabb.mins.x {
+                dynamic_aabb.mins.x - character_aabb.maxs.x
+            } else if dynamic_aabb.maxs.x < character_aabb.mins.x {
+                character_aabb.mins.x - dynamic_aabb.maxs.x
+            } else {
+                0.0
+            };
+            let gap_y = if character_aabb.maxs.y < dynamic_aabb.mins.y {
+                dynamic_aabb.mins.y - character_aabb.maxs.y
+            } else if dynamic_aabb.maxs.y < character_aabb.mins.y {
+                character_aabb.mins.y - dynamic_aabb.maxs.y
+            } else {
+                0.0
+            };
+            let gap_z = if character_aabb.maxs.z < dynamic_aabb.mins.z {
+                dynamic_aabb.mins.z - character_aabb.maxs.z
+            } else if dynamic_aabb.maxs.z < character_aabb.mins.z {
+                character_aabb.mins.z - dynamic_aabb.maxs.z
+            } else {
+                0.0
+            };
+            if gap_x * gap_x + gap_y * gap_y + gap_z * gap_z > 0.08_f32 * 0.08_f32 {
+                continue;
+            }
+            let Some(body) = world.bodies.get_mut(body_handle) else {
+                continue;
+            };
+            if body.is_dynamic() {
+                let current_speed = body.linvel().dot(push_direction);
+                let speed_gain = (push_speed - current_speed).max(0.0);
+                if speed_gain > 0.0 {
+                    let impulse = push_direction * speed_gain * body.mass();
+                    body.apply_impulse(impulse, true);
+                }
+            }
+        }
+    }
+
     let body = world
         .bodies
         .get_mut(body_handle)

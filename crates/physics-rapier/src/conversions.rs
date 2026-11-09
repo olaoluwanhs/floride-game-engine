@@ -179,9 +179,10 @@ fn heightfield_shape(description: &HeightFieldDesc) -> Result<(SharedShape, Vect
         return Err(invalid("heightfield dimensions are too large"));
     }
 
-    // Rapier centers its heightfield at the midpoint. This offset puts its
-    // first sample back at the API's local origin (X=0, Z=0).
-    let offset = Vector::new(width * 0.5, 0.0, depth * 0.5);
+    // The public heightfield contract places its first sample at local origin.
+    // Thin and thick forms use the same local X/Z coordinates, with no extra
+    // adapter offset.
+    let offset = Vector::ZERO;
     let shape = match description.thickness {
         Some(thickness) => {
             validate_positive(thickness, "heightfield thickness")?;
@@ -235,14 +236,14 @@ fn heightfield_point(
     description: &HeightFieldDesc,
     row: usize,
     column: usize,
-    width: f32,
-    depth: f32,
+    _width: f32,
+    _depth: f32,
 ) -> Vector {
     let sample_index = row * description.columns + column;
     Vector::new(
-        column as f32 * description.cell_size_x - width * 0.5,
+        column as f32 * description.cell_size_x,
         description.height_samples[sample_index],
-        row as f32 * description.cell_size_z - depth * 0.5,
+        row as f32 * description.cell_size_z,
     )
 }
 

@@ -4,4 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+game-types = { path = "../../crates/game-types" }
 macroquad = "0.4.16"
+physics-api = { path = "../../crates/physics-api" }
+physics-rapier = { path = "../../crates/physics-rapier" }

@@ -66,7 +66,10 @@ pub struct RapierWorld {
 /// the game-facing API.
 pub(crate) enum WorldObject {
     StaticCollider(ColliderHandle),
-    PhantomCollider(ColliderHandle),
+    PhantomCollider {
+        collider: ColliderHandle,
+        local_offset: Vector,
+    },
     DynamicBody {
         body: RigidBodyHandle,
         collider: ColliderHandle,
@@ -164,6 +167,15 @@ impl physics_api::PhysicsWorld for RapierWorld {
         description: &physics_api::PhantomColliderDesc,
     ) -> Result<PhysicsHandle, PhysicsError> {
         phantom_colliders::create(self, description)
+    }
+
+    /// Moves or rotates a phantom collider, preserving any shape-local offset.
+    fn set_phantom_transform(
+        &mut self,
+        phantom_handle: PhysicsHandle,
+        transform: &physics_api::PhysicsTransform,
+    ) -> Result<(), PhysicsError> {
+        phantom_colliders::set_transform(self, phantom_handle, transform)
     }
 
     /// Removes a phantom sensor and its adapter lookup data.

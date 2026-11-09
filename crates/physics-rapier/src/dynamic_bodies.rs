@@ -116,7 +116,11 @@ pub(super) fn body_transform(
         .get(&handle)
         .ok_or(PhysicsError::InvalidHandle(handle))?;
     let pose = match object {
-        WorldObject::StaticCollider(collider) | WorldObject::PhantomCollider(collider) => world
+        WorldObject::StaticCollider(collider) => world
+            .colliders
+            .get(*collider)
+            .map(|collider| collider.position()),
+        WorldObject::PhantomCollider { collider, .. } => world
             .colliders
             .get(*collider)
             .map(|collider| collider.position()),

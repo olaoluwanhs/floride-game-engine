@@ -59,6 +59,69 @@ fn character_moves_and_is_blocked_by_a_wall() {
 }
 
 #[test]
+fn character_pushes_a_dynamic_box() {
+    let mut world = RapierWorld::new();
+    world
+        .create_static_collider(&StaticColliderDesc {
+            entity_id: Some(EntityId::new(100)),
+            transform: PhysicsTransform::IDENTITY,
+            shape: PrimitiveShape::Plane { half_extents: None },
+        })
+        .unwrap();
+
+    let body = world
+        .create_dynamic_body(&DynamicBodyDesc {
+            entity_id: EntityId::new(101),
+            transform: transform_at(2.0, 0.5, 0.0),
+            shape: PrimitiveShape::Box {
+                half_extents: Vec3::new(0.5, 0.5, 0.5),
+            },
+            mass_kg: 2.0,
+            friction: 0.5,
+            elasticity: 0.0,
+        })
+        .unwrap();
+    let character = world
+        .create_character(&CharacterDesc {
+            entity_id: EntityId::new(102),
+            position: Vec3::new(0.0, 1.0, 0.0),
+            shape: PrimitiveShape::Capsule {
+                radius: 0.5,
+                half_height: 0.5,
+            },
+            max_slope_angle_radians: std::f32::consts::FRAC_PI_4,
+            step_height: 0.0,
+        })
+        .unwrap();
+
+    let initial_x = world.body_transform(body).unwrap().position.x;
+    for _ in 0..8 {
+        world
+            .move_character(character, &Vec3::new(0.12, 0.0, 0.0))
+            .unwrap();
+        world.step(1.0 / 60.0).unwrap();
+    }
+    let distant_x = world.body_transform(body).unwrap().position.x;
+    assert!(
+        (distant_x - initial_x).abs() < 0.05,
+        "dynamic box moved before the character reached it: x={distant_x}"
+    );
+
+    for _ in 8..20 {
+        world
+            .move_character(character, &Vec3::new(0.12, 0.0, 0.0))
+            .unwrap();
+        world.step(1.0 / 60.0).unwrap();
+    }
+
+    let moved_x = world.body_transform(body).unwrap().position.x;
+    assert!(
+        moved_x > initial_x + 0.05,
+        "dynamic box stayed at x={initial_x}, expected movement after character contact; got x={moved_x}"
+    );
+}
+
+#[test]
 fn raycast_returns_entity_and_respects_the_ignored_entity() {
     let mut world = RapierWorld::new();
     let target = world
@@ -137,6 +200,68 @@ fn phantom_reports_overlaps_and_raycast_hits() {
     assert_eq!(hits[0].entity_id, EntityId::new(10));
     world.remove_phantom_collider(phantom).unwrap();
     assert!(world.phantom_overlaps(phantom).is_err());
+}
+
+#[test]
+fn phantom_transform_can_be_updated() {
+    let mut world = RapierWorld::new();
+    let phantom = world
+        .create_phantom_collider(&PhantomColliderDesc {
+            entity_id: EntityId::new(13),
+            transform: transform_at(0.0, 0.0, 0.0),
+            shape: PrimitiveShape::Sphere { radius: 1.0 },
+            behavior: PhantomBehavior::RaycastTarget,
+        })
+        .unwrap();
+
+    world
+        .set_phantom_transform(phantom, &transform_at(3.0, 2.0, 1.0))
+        .unwrap();
+    let moved_transform = world.body_transform(phantom).unwrap();
+    assert_eq!(moved_transform.position, Vec3::new(3.0, 2.0, 1.0));
+
+    let error = world.set_phantom_transform(
+        phantom,
+        &PhysicsTransform::new(Vec3::ZERO, Quaternion::new(0.0, 0.0, 0.0, 0.0)),
+    );
+    assert!(error.is_err());
+}
+
+#[test]
+fn updating_heightfield_phantom_transform_uses_the_public_origin() {
+    let mut world = RapierWorld::new();
+    let phantom = world
+        .create_phantom_collider(&PhantomColliderDesc {
+            entity_id: EntityId::new(14),
+            transform: PhysicsTransform::IDENTITY,
+            shape: PrimitiveShape::HeightField(HeightFieldDesc {
+                rows: 2,
+                columns: 2,
+                height_samples: vec![0.0; 4],
+                cell_size_x: 1.0,
+                cell_size_z: 1.0,
+                thickness: None,
+            }),
+            behavior: PhantomBehavior::RaycastTarget,
+        })
+        .unwrap();
+    let rotation = Quaternion::new(
+        0.0,
+        std::f32::consts::FRAC_1_SQRT_2,
+        0.0,
+        std::f32::consts::FRAC_1_SQRT_2,
+    );
+    world
+        .set_phantom_transform(
+            phantom,
+            &PhysicsTransform::new(Vec3::new(3.0, 2.0, 1.0), rotation),
+        )
+        .unwrap();
+
+    let moved_transform = world.body_transform(phantom).unwrap();
+    assert!((moved_transform.position.x - 3.0).abs() < 0.001);
+    assert!((moved_transform.position.y - 2.0).abs() < 0.001);
+    assert!((moved_transform.position.z - 1.0).abs() < 0.001);
 }
 
 #[test]

@@ -43,16 +43,44 @@ pub(super) fn create(
         // Only these two behaviors should appear in phantom ray queries.
         world.phantom_ray_targets.insert(collider_handle);
     }
-    world
-        .objects
-        .insert(handle, WorldObject::PhantomCollider(collider_handle));
+    world.objects.insert(
+        handle,
+        WorldObject::PhantomCollider {
+            collider: collider_handle,
+            local_offset,
+        },
+    );
     Ok(handle)
+}
+
+/// Updates the phantom's requested world transform while preserving the
+/// shape-local offset used by heightfields.
+pub(super) fn set_transform(
+    world: &mut RapierWorld,
+    handle: PhysicsHandle,
+    transform: &physics_api::PhysicsTransform,
+) -> Result<(), PhysicsError> {
+    let (collider_handle, local_offset) = match world.objects.get(&handle) {
+        Some(WorldObject::PhantomCollider {
+            collider,
+            local_offset,
+        }) => (*collider, *local_offset),
+        _ => return Err(PhysicsError::InvalidHandle(handle)),
+    };
+    conversions::validate_transform(transform)?;
+    let collider = world
+        .colliders
+        .get_mut(collider_handle)
+        .ok_or(PhysicsError::InvalidHandle(handle))?;
+    let position = conversions::to_pose(transform) * Pose::from_translation(local_offset);
+    collider.set_position(position);
+    Ok(())
 }
 
 /// Removes a phantom and all of its adapter-side lookup entries.
 pub(super) fn remove(world: &mut RapierWorld, handle: PhysicsHandle) -> Result<(), PhysicsError> {
     let collider_handle = match world.objects.get(&handle) {
-        Some(WorldObject::PhantomCollider(collider_handle)) => *collider_handle,
+        Some(WorldObject::PhantomCollider { collider, .. }) => *collider,
         _ => return Err(PhysicsError::InvalidHandle(handle)),
     };
 
@@ -82,7 +110,7 @@ pub(super) fn overlaps(
     handle: PhysicsHandle,
 ) -> Result<Vec<PhantomOverlap>, PhysicsError> {
     let phantom_collider = match world.objects.get(&handle) {
-        Some(WorldObject::PhantomCollider(collider_handle)) => *collider_handle,
+        Some(WorldObject::PhantomCollider { collider, .. }) => *collider,
         _ => return Err(PhysicsError::InvalidHandle(handle)),
     };
     let phantom_entity_id = world
