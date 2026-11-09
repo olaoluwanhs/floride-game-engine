@@ -4,7 +4,10 @@ This is a compact summary, not a replacement for `docs/Rust_Game_Core_Architectu
 
 ## What we build and what we reuse
 
-- Build the FPS-specific rules ourselves: movement rules, weapons, damage, enemy decisions, modes, snapshots, and events.
+- Put engine-independent mechanics that can serve multiple games in `game-logic`, depending only on `game-types` and `physics-api`. Movement systems consume general intents rather than a fixed game-command list.
+- Keep each game's commands/actions, input bindings, combo sequences and responses in that game's crate. Games can define any number of actions and variable-length combos; `game-types` and `game-logic` must not impose a universal command enum.
+- Standardize host integration through `game-api::GameAdapter`: each game implements the same create/input/tick/snapshot/event lifecycle while retaining its own associated types and selecting a `PhysicsWorld` implementation.
+- Build the FPS-specific rules in the FPS game crate: weapons, damage, enemy decisions, modes, snapshots and events. Reuse shared mechanics from `game-logic` where appropriate.
 - Reuse focused libraries for established technical problems. Rapier 3D is the planned physics implementation, hidden behind our own physics interface.
 - Do not adopt a full game engine or a separate game-loop library for the initial headless core. The host paces the simulation and calls one fixed-step `tick()` at a time.
 
@@ -26,4 +29,4 @@ This is a compact summary, not a replacement for `docs/Rust_Game_Core_Architectu
 
 ## Implementation order
 
-Follow the milestones in the architecture document: repository foundation, physics and a moving player, runtime and snapshots, then weapons/enemies and survival. Add WASM/native bindings and story support only at their planned milestones.
+Follow the milestones in the architecture document: repository foundation; physics and a moving player; `game-api` and the FPS adapter implementation, reusable `game-logic`, then FPS-owned actions, combos, runtime and snapshots; then weapons/enemies and survival. Add WASM/native bindings and story support only at their planned milestones.

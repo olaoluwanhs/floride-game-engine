@@ -10,7 +10,7 @@
 
 ## 1. Purpose
 
-Build an **independent Rust library** containing the logic and simulation for a first-person shooter. The library must not be tied to any particular game engine or user interface. We should be able to run the same core from:
+Build an **independent Rust workspace** with reusable game mechanics and a first-person-shooter game built on them. Neither layer is tied to a particular game engine or user interface. We should be able to run the FPS game from:
 
 - A browser using Rust compiled to WebAssembly (WASM).
 - A native mobile application (Android/iOS), through a native integration layer.
@@ -19,7 +19,7 @@ Build an **independent Rust library** containing the logic and simulation for a 
 - A Godot application, through an appropriate native extension/wrapper.
 - A Rust command-line test program, with no graphics at all.
 
-**The goal is to reuse gameplay rules and simulation, not to reuse the renderer.** Every application is responsible for drawing the world, reading hardware input, playing audio, and providing menus. The Rust core decides what happens in the game.
+**The goal is to reuse gameplay mechanics and simulation, not to reuse the renderer.** Every application is responsible for drawing the world, collecting hardware input, playing audio, and providing menus. A game-specific Rust crate defines that game's controls and rules; reusable systems provide configurable mechanics that it can compose.
 
 ### Scope of this document
 
@@ -49,19 +49,23 @@ This document specifies **only the Rust core repository**. It describes its modu
 
 ## 3. What belongs in the core, and what does not
 
-| The Rust core owns                                               | The application / renderer owns                            |
-| ---------------------------------------------------------------- | ---------------------------------------------------------- |
-| World simulation and entities                                    | 3D drawing, shaders and lighting                           |
-| Collision and character movement via physics adapter             | Loading meshes and textures onto GPU                       |
-| Health, damage and death rules                                   | First-person camera presentation and visual effects        |
-| Weapons, magazines, reload timing, projectiles and hitscan rules | Weapon models, muzzle flashes, bullet tracers              |
-| Enemy decision-making and combat behavior                        | Skeletal animation playback and blending                   |
-| Survival waves, scores and difficulty rules                      | HUD, settings screens and menus                            |
-| Story missions, triggers and objective progress                  | Dialog windows, subtitles and cutscene presentation        |
-| Inventory, ammunition and gameplay pickups                       | Touch, controller, keyboard and mouse collection           |
-| Simulation events (`ShotFired`, `EnemyKilled`, etc.)             | Playing sounds, vibrations and particle effects            |
-| Save/load game data and version checks                           | File dialogs, platform storage permissions and cloud saves |
-| Game-state snapshots for applications                            | Interpolating and displaying those snapshots               |
+| The Rust core owns                                                 | The application / renderer owns                            |
+| ------------------------------------------------------------------ | ---------------------------------------------------------- |
+| World simulation and entities                                      | 3D drawing, shaders and lighting                           |
+| Collision and character movement via physics adapter               | Loading meshes and textures onto GPU                       |
+| Reusable mechanics and configured movement systems                 | First-person camera presentation and visual effects        |
+| FPS-specific health, damage, weapons and death rules               | Weapon models, muzzle flashes, bullet tracers              |
+| Enemy decision-making and combat behavior                          | Skeletal animation playback and blending                   |
+| Survival waves, scores and difficulty rules                        | HUD, settings screens and menus                            |
+| Story missions, triggers and objective progress                    | Dialog windows, subtitles and cutscene presentation        |
+| Inventory, ammunition and gameplay pickups                         | Touch, controller, keyboard and mouse collection           |
+| Game-specific simulation events (`ShotFired`, `EnemyKilled`, etc.) | Playing sounds, vibrations and particle effects            |
+| Save/load game data and version checks                             | File dialogs, platform storage permissions and cloud saves |
+| Game-state snapshots for applications                              | Interpolating and displaying those snapshots               |
+
+Reusable mechanics belong in `game-logic`; a game-specific crate composes
+them and owns that game's command vocabulary, input bindings and responses.
+The reusable systems must not impose a fixed list or number of game commands.
 
 **Important boundary:** The Rust core can expose a logical aim direction and character orientation. A renderer decides exactly how the camera moves, whether it shakes, and which animation looks best. The core must never read a browser DOM event or mobile touch event directly.
 
@@ -70,34 +74,29 @@ This document specifies **only the Rust core repository**. It describes its modu
 ## 4. High-level architecture
 
 ```text
-                Any game application / host
-     (Browser, React Native, Unity, Godot, C++, raylib)
-                           |
-              Normalized game commands
-                           |
-                 Platform-specific wrapper
-                  /                 \
-              WASM API           Native C ABI
-                  \                 /
-                   Public Core API
-                           |
-                     Game Runtime
-              (clock, commands, world, modes)
-                  /        |        \
-            Gameplay    Enemy AI    Missions
-                  \        |        /
-                     Physics API
-                           |
-                    Rapier Adapter
-                           |
-                      Rapier 3D
-                           |
-                  Snapshot + Events
-                           |
-                    Host / renderer
+                 Any game application / host
+      (Browser, React Native, Unity, Godot, C++, raylib)
+                            |
+            Platform wrapper / host integration
+               (WASM API or native C ABI)
+                            |
+                game-api::GameAdapter contract
+                            |
+                 Selected game implementation
+              (game-owned inputs, combos, rules)
+                    /                  \\
+          Reusable game-logic       Physics API
+          (shared systems)                |
+                                 Rapier Adapter
+                                       |
+                                    Rapier 3D
+                            |
+             Game-specific snapshot + events
+                            |
+                  Application / renderer
 ```
 
-**Direction of dependencies:** The game depends on common types and the **physics interface**; the Rapier adapter implements that interface. The WASM and native wrappers depend on the game. The game never depends on wrappers.
+**Direction of dependencies:** `game-api` defines the shared lifecycle contract without prescribing game input or output types. Each game implements that contract and depends on `game-api`, reusable `game-logic`, common types and the **physics interface**. `game-logic` depends on common types and the physics interface. The Rapier adapter implements that interface. A host wrapper integrates with a selected game; gameplay never depends on wrappers.
 
 ---
 
@@ -117,20 +116,27 @@ game-core/
 │   └── workflows/
 │       └── ci.yml
 ├── crates/
-│   ├── game-types/             # Shared, engine-neutral types and commands
+│   ├── game-types/             # Shared, engine-neutral primitive types
 │   │   └── src/lib.rs
 │   ├── physics-api/            # Physics trait + shared physics data types
 │   │   └── src/lib.rs
 │   ├── physics-rapier/         # Rapier 3D implementation of physics-api
 │   │   └── src/lib.rs
-│   ├── game/                   # Entire playable single-player simulation
+│   ├── game-api/               # Shared host-facing game lifecycle contract
+│   │   └── src/lib.rs
+│   ├── game-logic/             # Reusable engine-independent gameplay systems
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       └── movement.rs     # Configurable movement driven by general intents
+│   ├── game/                   # FPS-specific game, built on game-logic
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── runtime.rs
+│   │       ├── commands.rs     # This game's commands and action responses
+│   │       ├── input.rs        # This game's bindings and combo sequences
 │   │       ├── world.rs
 │   │       ├── entities.rs
 │   │       ├── player.rs
-│   │       ├── movement.rs
 │   │       ├── weapons.rs
 │   │       ├── combat.rs
 │   │       ├── enemies.rs
@@ -167,15 +173,17 @@ game-core/
 
 ### Why these crates are separate
 
-- **`game-types`:** Common definitions (`Vec3`, entity IDs, inputs, configuration, events). Other crates can refer to these without needing Rapier.
+- **`game-types`:** Common primitives (`Vec3`, entity IDs and transforms). It does not define a universal game-command enum.
 - **`physics-api`:** A contract describing what the game needs from physics.
 - **`physics-rapier`:** The only place where Rapier-specific structures should appear. Translate between our types and Rapier types here.
-- **`game`:** Implements the actual gameplay. It is not specific to an engine or rendering technology.
+- **`game-api`:** A host-facing lifecycle contract implemented by every game. It standardizes creating a game with a `PhysicsWorld`, submitting that game's input, ticking, reading its snapshot and draining its events, while leaving those types game-specific.
+- **`game-logic`:** Reusable mechanics such as configurable character movement. Systems consume general intents (for example, movement direction and jump request), not game-specific command enums.
+- **`game`:** The FPS-specific game. It defines its own command/action types, input bindings and combo sequences, decides what those actions do, and composes reusable systems. Other games can define different commands and combos without changing `game-logic`.
 - **`bindings-wasm`:** Converts browser-facing calls and buffers into calls to `game`.
 - **`bindings-native`:** Exposes a simple native interface usable by C/C++, C#, JSI or engine extensions.
 - **`visual-demo`:** A small development-only executable that sends commands to the core and draws returned snapshots. Its windowing/rendering dependency belongs only to this example, never to `game` or the public library API.
 
-**Keep the initial setup manageable:** Start with `game-types`, `physics-api`, `physics-rapier`, `game`, and `examples/headless-demo`. Add `examples/visual-demo` when the runtime can accept commands and provide snapshots (Milestone 2). Add WASM and native bindings **after** the headless simulation runs. Do not create dozens of empty modules just to match the eventual tree.
+**Keep the initial setup manageable:** Start with `game-types`, `physics-api`, `physics-rapier`, `game-api`, `game-logic`, and the FPS-specific `game`. Add `examples/visual-demo` when the FPS game implements the adapter and can provide snapshots (Milestone 2). Add WASM and native bindings **after** the headless simulation runs. Do not create dozens of empty modules just to match the eventual tree.
 
 ### Dependency rule
 
@@ -183,14 +191,16 @@ game-core/
 game-types                 (no dependencies on our other crates)
 physics-api  ------------> game-types
 physics-rapier -----------> physics-api + game-types + rapier3d
-game ---------------------> game-types + physics-api
-bindings-wasm ------------> game (+ physics-rapier to construct the runtime)
-bindings-native ----------> game (+ physics-rapier to construct the runtime)
-headless-demo ------------> game (+ physics-rapier)
-visual-demo --------------> game + physics-rapier + chosen renderer (example only)
+game-api -----------------> physics-api
+game-logic ---------------> game-types + physics-api
+game (FPS-specific) ------> game-api + game-logic + game-types + physics-api
+bindings-wasm ------------> game-api + selected game crate (+ physics-rapier to construct it)
+bindings-native ----------> game-api + selected game crate (+ physics-rapier to construct it)
+headless-demo ------------> game-api + selected game crate (+ physics-rapier)
+visual-demo --------------> game-api + selected game crate + physics-rapier + chosen renderer (example only)
 ```
 
-If factory creation becomes repetitive, introduce a small `game-defaults` crate later to assemble the game with Rapier. **Do not make the `game` crate import Rapier just for convenience.**
+If factory creation becomes repetitive, introduce a small `game-defaults` crate later to assemble a selected game with Rapier. **Do not make `game-logic` or a game-specific crate import Rapier just for convenience.**
 
 ---
 
@@ -215,40 +225,51 @@ The renderer must translate these conventions if an engine uses different coordi
 
 ## 7. The public game API
 
-Applications should interact with one conceptual object, `GameRuntime` (or `GameSession`). It should hide internal storage, physics handles and AI details.
+Applications should interact with one conceptual object provided by the selected game, such as its `GameRuntime` (or `GameSession`). It should hide internal storage, physics handles and AI details. `game-logic` provides reusable systems; it does not prescribe one universal runtime or command model for all games.
 
 ### Main responsibilities
 
 1. Create a game from configuration and a level description.
-2. Accept normalized player commands.
+2. Accept actions defined by that game.
 3. Run exactly one fixed simulation step on request.
 4. Provide read-only state snapshots.
 5. Provide gameplay events produced during simulation.
 6. Save or restore supported game data.
 7. Reset or close the game cleanly.
 
-### Suggested Rust-facing API (illustrative, not final compilable code)
+### Shared game adapter contract
+
+Every game implements the same host-facing lifecycle contract. The associated types let each game define its own configuration, input, snapshot, events and error without forcing those details into a universal enum or data model.
 
 ```rust
-pub struct GameRuntime<P: PhysicsWorld> {
-    // world, physics, mode, clock and event queues
-    physics: P,
-}
+pub trait GameAdapter: Sized {
+    type Physics: PhysicsWorld;
+    type Config;
+    type Input;
+    type Snapshot;
+    type Event;
+    type Error;
 
-impl<P: PhysicsWorld> GameRuntime<P> {
-    pub fn new(config: GameConfig, level: LevelDefinition, physics: P)
-        -> Result<Self, GameError>;
-
-    pub fn submit(&mut self, command: GameCommand) -> Result<(), GameError>;
-    pub fn tick(&mut self) -> Result<(), GameError>; // one fixed step
-    pub fn snapshot(&self) -> GameSnapshot;
-    pub fn drain_events(&mut self) -> Vec<GameEvent>;
+    fn create(config: Self::Config, physics: Self::Physics)
+        -> Result<Self, Self::Error>;
+    fn submit_input(&mut self, input: Self::Input) -> Result<(), Self::Error>;
+    fn tick(&mut self) -> Result<(), Self::Error>;
+    fn snapshot(&self) -> Self::Snapshot;
+    fn drain_events(&mut self) -> Vec<Self::Event>;
 }
 ```
 
-An internal generic `GameRuntime<P>` is fine in Rust. The public FFI boundary should **hide the generic** behind a concrete constructed runtime and opaque handle. Another acceptable design is `Box<dyn PhysicsWorld>` where the performance and API trade-offs are measured.
+This is the shared Rust integration boundary, not a runtime plugin system. Rust hosts can use the trait generically. WASM and native FFI wrappers still select and construct a concrete game, then translate its game-specific types to the external ABI. Keep Rapier and its concrete runtime construction behind the selected game or a factory; do not expose physics handles through the adapter.
 
-### Commands sent **into** the core
+### Game-defined inputs and actions
+
+Each game owns its command/action types, input bindings, combo sequences and the responses to matched actions. A game may define three actions or many more; there is no shared fixed command list. Combo sequences may have different lengths in different games (for example, `A-B-C` in one game and `A-B-C-D` in another).
+
+The host still reads hardware and forwards neutral input tokens or events. The selected game defines how those inputs form actions and what each action does. Reusable logic may provide a configurable sequence-matching utility later, but it must consume game-supplied bindings and return game-defined actions; it does not choose the inputs or gameplay response.
+
+Reusable movement systems consume general movement intents (such as a direction vector and jump request), which the game derives from its own actions. This keeps movement reusable without constraining a game's command set.
+
+### Example actions for the FPS game
 
 ```text
 Move(forward, strafe)
@@ -264,7 +285,7 @@ Pause / Resume
 StartMode(Survival | Story)
 ```
 
-All values are **game actions**, not browser key names, touch coordinates or controller button codes. External adapters convert hardware input into the same commands.
+These are illustrative FPS actions, not a universal API. Other games define their own action types and mappings. Hardware-specific details such as key codes and touch coordinates remain in the host; game-specific bindings and combo rules live with the game.
 
 ### Data returned **from** the core
 
@@ -794,14 +815,18 @@ These are intended quality gates; adjust feature/target combinations if WASM-onl
 
 **Done when:** The player can walk, jump, land and collide with walls, verified by automated tests.
 
-### Milestone 2 — Game runtime and snapshots
+### Milestone 2 — Reusable game logic and game-owned actions
 
-- Add commands, fixed ticks, stable entity IDs and event queue.
-- Produce structured game snapshots.
-- Add a test that runs thousands of simulation ticks without a renderer.
-- Add the optional `examples/visual-demo` binary as a separate host. Show a simple level and player from snapshots, map basic keyboard controls to game commands, and advance the simulation at its fixed rate.
+- Define `crates/game-api` first: a shared `GameAdapter` trait for create, submit game-specific input, fixed-step tick, snapshot and event draining. Use associated types so each game's config, input, snapshot, events and errors stay its own.
+- Implement the contract for the FPS `GameRuntime`; verify a host can use the standard lifecycle without depending on FPS-specific input or snapshot types.
+- Add `crates/game-logic`, depending only on `game-types` and `physics-api`; move configurable, engine-independent movement behavior there and have it consume general movement intents.
+- Keep `crates/game` as the FPS-specific game. Define its own actions, bindings, combo sequences and action responses there; do not put a universal command enum in `game-types` or `game-logic`.
+- Support variable-length, game-defined combos so each game can choose its own inputs and sequences. Keep any shared combo-matching utility configurable and separate from the meaning of the resulting actions.
+- Add the FPS runtime's fixed ticks, stable entity IDs, event queue and structured snapshots.
+- Add a headless test that runs thousands of simulation ticks, verifies movement/snapshot behavior, and checks that game-defined inputs trigger game-defined responses.
+- Add the optional `examples/visual-demo` as a separate host that forwards inputs to the FPS game and displays its snapshots.
 
-**Done when:** External code can drive the game entirely through the public Rust API; the visual demo can display and control a simple simulation without adding rendering dependencies to the core.
+**Done when:** The FPS runtime implements the shared adapter contract; a host can use the same lifecycle for any game while each game retains its own input, actions, combos, snapshots and events; and reusable movement works without adopting the FPS game's command list or rendering dependencies.
 
 ### Milestone 3 — First weapon and enemy
 

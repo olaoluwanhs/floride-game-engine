@@ -159,6 +159,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-api"
+version = "0.1.0"
+dependencies = [
+ "game-types",
+ "physics-api",
+]
+
+[[package]]
+name = "game-logic"
+version = "0.1.0"
+dependencies = [
+ "game-types",
+ "physics-api",
+]
+
+[[package]]
 name = "game-types"
 version = "0.1.0"
 

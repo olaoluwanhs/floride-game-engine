@@ -3,6 +3,8 @@ members = [
     "crates/game-types",
     "crates/physics-api",
     "crates/physics-rapier",
+    "crates/game-api",
+    "crates/game-logic",
     "examples/visual-demo",
 ]
 resolver = "3"
