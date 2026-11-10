@@ -281,4 +281,18 @@ impl physics_api::PhysicsWorld for RapierWorld {
     ) -> Result<physics_api::PhysicsTransform, PhysicsError> {
         dynamic_bodies::body_transform(self, body_handle)
     }
+
+    /// Looks up the dynamic body handle associated with `entity_id`, if one exists.
+    fn dynamic_body_handle(&self, entity_id: EntityId) -> Option<PhysicsHandle> {
+        dynamic_bodies::lookup_by_entity(self, entity_id)
+    }
+
+    /// Finds every dynamic body whose center lies within `radius` meters of `center`.
+    fn dynamic_bodies_in_radius(
+        &self,
+        center: &Vec3,
+        radius: f32,
+    ) -> Result<Vec<(EntityId, PhysicsHandle, Vec3)>, PhysicsError> {
+        dynamic_bodies::bodies_in_radius(self, center, radius)
+    }
 }

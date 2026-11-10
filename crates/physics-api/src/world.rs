@@ -1,4 +1,4 @@
-use game_types::Vec3;
+use game_types::{EntityId, Vec3};
 
 use crate::{
     CharacterDesc, CharacterMoveResult, DynamicBodyDesc, PhantomColliderDesc, PhantomOverlap,
@@ -141,4 +141,24 @@ pub trait PhysicsWorld {
 
     /// Returns the latest position and orientation for an object in this world.
     fn body_transform(&self, body_handle: PhysicsHandle) -> Result<PhysicsTransform, PhysicsError>;
+
+    /// Looks up the dynamic body handle associated with `entity_id`, if one exists.
+    ///
+    /// Returns `None` when `entity_id` refers to a static collider, phantom sensor,
+    /// kinematic character, or an unknown entity.
+    fn dynamic_body_handle(&self, _entity_id: EntityId) -> Option<PhysicsHandle> {
+        None
+    }
+
+    /// Finds every dynamic body whose center lies within `radius` meters of `center`.
+    ///
+    /// Returns `(entity_id, body_handle, body_position)` tuples so game logic can
+    /// apply blast impulses or damage falloff to nearby movable objects.
+    fn dynamic_bodies_in_radius(
+        &self,
+        _center: &Vec3,
+        _radius: f32,
+    ) -> Result<Vec<(EntityId, PhysicsHandle, Vec3)>, PhysicsError> {
+        Ok(Vec::new())
+    }
 }

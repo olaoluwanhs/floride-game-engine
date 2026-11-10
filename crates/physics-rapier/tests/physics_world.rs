@@ -530,3 +530,46 @@ fn invalid_descriptions_and_wrong_handle_kinds_return_errors() {
     );
     world.remove_static_collider(static_collider).unwrap();
 }
+
+#[test]
+fn dynamic_body_entity_lookup_and_radius_query() {
+    let mut world = RapierWorld::new();
+    let static_id = EntityId::new(40);
+    let near_id = EntityId::new(41);
+    let far_id = EntityId::new(42);
+
+    world
+        .create_static_collider(&static_box(40, 0.0, 0.0, 0.0, Vec3::new(1.0, 1.0, 1.0)))
+        .unwrap();
+    let near_handle = world
+        .create_dynamic_body(&DynamicBodyDesc {
+            entity_id: near_id,
+            transform: transform_at(2.0, 1.0, 0.0),
+            shape: PrimitiveShape::Sphere { radius: 0.5 },
+            mass_kg: 1.5,
+            friction: 0.5,
+            elasticity: 0.2,
+        })
+        .unwrap();
+    world
+        .create_dynamic_body(&DynamicBodyDesc {
+            entity_id: far_id,
+            transform: transform_at(15.0, 1.0, 0.0),
+            shape: PrimitiveShape::Sphere { radius: 0.5 },
+            mass_kg: 1.5,
+            friction: 0.5,
+            elasticity: 0.2,
+        })
+        .unwrap();
+
+    // Static colliders must not resolve as dynamic bodies.
+    assert_eq!(world.dynamic_body_handle(static_id), None);
+    assert_eq!(world.dynamic_body_handle(near_id), Some(near_handle));
+
+    let nearby = world
+        .dynamic_bodies_in_radius(&Vec3::new(0.0, 1.0, 0.0), 4.0)
+        .unwrap();
+    assert_eq!(nearby.len(), 1);
+    assert_eq!(nearby[0].0, near_id);
+    assert_eq!(nearby[0].1, near_handle);
+}

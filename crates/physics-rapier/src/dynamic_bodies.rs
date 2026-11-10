@@ -1,4 +1,4 @@
-use game_types::Vec3;
+use game_types::{EntityId, Vec3};
 use physics_api::{DynamicBodyDesc, PhysicsError, PhysicsHandle, PhysicsTransform};
 use rapier3d::prelude::{ColliderBuilder, Pose, RigidBodyBuilder, RigidBodyHandle};
 
@@ -144,4 +144,53 @@ fn dynamic_body_handle(
         Some(WorldObject::DynamicBody { body, .. }) => Ok(*body),
         _ => Err(PhysicsError::InvalidHandle(handle)),
     }
+}
+
+/// Looks up the dynamic body handle registered for a game entity ID.
+pub(super) fn lookup_by_entity(world: &RapierWorld, entity_id: EntityId) -> Option<PhysicsHandle> {
+    for (&handle, object) in &world.objects {
+        if let WorldObject::DynamicBody { collider, .. } = object {
+            if world.entities_by_collider.get(collider).copied().flatten() == Some(entity_id) {
+                return Some(handle);
+            }
+        }
+    }
+    None
+}
+
+/// Finds every dynamic body whose center lies within `radius` meters of `center`.
+pub(super) fn bodies_in_radius(
+    world: &RapierWorld,
+    center: &Vec3,
+    radius: f32,
+) -> Result<Vec<(EntityId, PhysicsHandle, Vec3)>, PhysicsError> {
+    validation::validate_vec3(center, "radius query center")?;
+    if !radius.is_finite() || radius < 0.0 {
+        return Err(PhysicsError::InvalidDescription(
+            "query radius must be non-negative and finite".into(),
+        ));
+    }
+
+    let max_dist_sq = radius * radius;
+    let mut matches = Vec::new();
+
+    for (&handle, object) in &world.objects {
+        let WorldObject::DynamicBody { body, collider } = object else {
+            continue;
+        };
+        let Some(entity_id) = world.entities_by_collider.get(collider).copied().flatten() else {
+            continue;
+        };
+        let Some(rigid_body) = world.bodies.get(*body) else {
+            continue;
+        };
+        let pos = conversions::from_vector(rigid_body.translation());
+        if pos.subtract(center).length_squared() <= max_dist_sq {
+            matches.push((entity_id, handle, pos));
+        }
+    }
+
+    // Sort deterministically by entity ID so gameplay blast behavior is reproducible.
+    matches.sort_by_key(|(entity_id, _, _)| entity_id.get());
+    Ok(matches)
 }
