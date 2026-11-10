@@ -7,6 +7,7 @@ pub mod render;
 pub mod scene;
 
 pub use render::{
-    draw_error, draw_hud, draw_scene, CameraSettings, GameCamera, OrbitCamera,
+    draw_error, draw_hud, draw_scene, draw_scene_without_grid, CameraSettings, GameCamera,
+    OrbitCamera,
 };
 pub use scene::{DemoObject, ObjectKind, RayHitVisual, RayVisual, RenderItem, Scene};

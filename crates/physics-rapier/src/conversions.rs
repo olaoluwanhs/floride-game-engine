@@ -179,14 +179,16 @@ fn heightfield_shape(description: &HeightFieldDesc) -> Result<(SharedShape, Vect
         return Err(invalid("heightfield dimensions are too large"));
     }
 
-    // The public heightfield contract places its first sample at local origin.
-    // Thin and thick forms use the same local X/Z coordinates, with no extra
-    // adapter offset.
-    let offset = Vector::ZERO;
-    let shape = match description.thickness {
+    // Parry's thin HeightField centers itself around (-width/2, -depth/2), while
+    // thick_heightfield_shape builds cells starting at (0, 0). Shifting the thin
+    // form by half-extents keeps both variants aligned with the public origin.
+    let (shape, offset) = match description.thickness {
         Some(thickness) => {
             validate_positive(thickness, "heightfield thickness")?;
-            thick_heightfield_shape(description, width, depth, thickness)?
+            (
+                thick_heightfield_shape(description, width, depth, thickness)?,
+                Vector::ZERO,
+            )
         }
         None => {
             // The API lays samples out row-by-row (rows advance along Z,
@@ -194,7 +196,10 @@ fn heightfield_shape(description: &HeightFieldDesc) -> Result<(SharedShape, Vect
             let heights = Array2::from_fn(description.rows, description.columns, |row, column| {
                 description.height_samples[row * description.columns + column]
             });
-            SharedShape::heightfield(heights, Vector::new(width, 1.0, depth))
+            (
+                SharedShape::heightfield(heights, Vector::new(width, 1.0, depth)),
+                Vector::new(width * 0.5, 0.0, depth * 0.5),
+            )
         }
     };
     Ok((shape, offset))

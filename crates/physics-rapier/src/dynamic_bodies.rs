@@ -119,17 +119,20 @@ pub(super) fn body_transform(
         WorldObject::StaticCollider(collider) => world
             .colliders
             .get(*collider)
-            .map(|collider| collider.position()),
-        WorldObject::PhantomCollider { collider, .. } => world
+            .map(|collider| *collider.position()),
+        WorldObject::PhantomCollider {
+            collider,
+            local_offset,
+        } => world
             .colliders
             .get(*collider)
-            .map(|collider| collider.position()),
+            .map(|collider| *collider.position() * Pose::from_translation(-*local_offset)),
         WorldObject::DynamicBody { body, .. } | WorldObject::Character { body, .. } => {
-            world.bodies.get(*body).map(|body| body.position())
+            world.bodies.get(*body).map(|body| *body.position())
         }
     }
     .ok_or(PhysicsError::InvalidHandle(handle))?;
-    Ok(conversions::from_pose(pose))
+    Ok(conversions::from_pose(&pose))
 }
 
 /// Returns a Rapier body only for a handle that identifies a dynamic body.

@@ -235,18 +235,40 @@ impl GameCamera {
     }
 }
 
-/// Draws all 3D scene objects and the coordinate grid.
+/// Draws all 3D scene objects, debug raycasts, and the optional reference grid.
 ///
 /// Notice how decoupled this is: `draw_scene` receives an immutable slice of `RenderItem`s
 /// and draws them. It has no knowledge of Rapier, simulation steps, or physics forces.
 pub fn draw_scene(items: &[RenderItem], rays: &[RayVisual], camera: &OrbitCamera) {
+    draw_scene_with_grid(items, rays, camera, true);
+}
+
+/// Draws all 3D scene objects and debug raycasts without drawing a `y = 0` reference grid.
+///
+/// Useful for level editors or terrain views that supply their own elevation grid.
+pub fn draw_scene_without_grid(items: &[RenderItem], rays: &[RayVisual], camera: &OrbitCamera) {
+    draw_scene_with_grid(items, rays, camera, false);
+}
+
+fn draw_scene_with_grid(
+    items: &[RenderItem],
+    rays: &[RayVisual],
+    camera: &OrbitCamera,
+    show_grid: bool,
+) {
     let camera = camera.camera();
     set_camera(&camera);
-    draw_grid(28, 1.0, GRAY, DARKGRAY);
+    if show_grid {
+        draw_grid(28, 1.0, GRAY, DARKGRAY);
+    }
 
     for item in items {
-        let mesh = shape_mesh(&item.shape, &item.transform, item.color);
-        draw_mesh(&mesh);
+        if let PrimitiveShape::HeightField(description) = &item.shape {
+            draw_heightfield_chunked(description, &item.transform, item.color);
+        } else {
+            let mesh = shape_mesh(&item.shape, &item.transform, item.color);
+            draw_mesh(&mesh);
+        }
     }
 
     // --- DRAW RAYCAST RAYS, HIT IMPACTS, AND SURFACE NORMALS ---
@@ -497,6 +519,22 @@ impl<'a> MeshBuilder<'a> {
 
     /// Generates a heightfield terrain grid with optional thickness walls.
     fn add_heightfield(&mut self, description: &HeightFieldDesc) {
+        if description.rows < 2 || description.columns < 2 {
+            return;
+        }
+        self.add_heightfield_rows(description, 0, description.rows - 1);
+    }
+
+    /// Generates heightfield geometry for row indices `row_start..row_end` (cell rows).
+    ///
+    /// Keeping row chunks small prevents Macroquad's default 5,000-index draw buffer
+    /// from truncating large terrains mid-mesh.
+    fn add_heightfield_rows(
+        &mut self,
+        description: &HeightFieldDesc,
+        row_start: usize,
+        row_end: usize,
+    ) {
         let point = |row: usize, column: usize| {
             let height = description.height_samples[row * description.columns + column];
             vec3(
@@ -505,7 +543,7 @@ impl<'a> MeshBuilder<'a> {
                 row as f32 * description.cell_size_z,
             )
         };
-        for row in 0..description.rows - 1 {
+        for row in row_start..row_end {
             for column in 0..description.columns - 1 {
                 let p00 = point(row, column);
                 let p10 = point(row + 1, column);
@@ -529,22 +567,28 @@ impl<'a> MeshBuilder<'a> {
         }
 
         if let Some(thickness) = description.thickness {
-            for column in 0..description.columns - 1 {
-                self.add_quad(
-                    point(0, column),
-                    bottom_point(point(0, column), thickness),
-                    bottom_point(point(0, column + 1), thickness),
-                    point(0, column + 1),
-                );
-                let last_row = description.rows - 1;
-                self.add_quad(
-                    point(last_row, column + 1),
-                    bottom_point(point(last_row, column + 1), thickness),
-                    bottom_point(point(last_row, column), thickness),
-                    point(last_row, column),
-                );
+            if row_start == 0 {
+                for column in 0..description.columns - 1 {
+                    self.add_quad(
+                        point(0, column),
+                        bottom_point(point(0, column), thickness),
+                        bottom_point(point(0, column + 1), thickness),
+                        point(0, column + 1),
+                    );
+                }
             }
-            for row in 0..description.rows - 1 {
+            let max_cell_row = description.rows - 1;
+            if row_end == max_cell_row {
+                for column in 0..description.columns - 1 {
+                    self.add_quad(
+                        point(max_cell_row, column + 1),
+                        bottom_point(point(max_cell_row, column + 1), thickness),
+                        bottom_point(point(max_cell_row, column), thickness),
+                        point(max_cell_row, column),
+                    );
+                }
+            }
+            for row in row_start..row_end {
                 self.add_quad(
                     point(row + 1, 0),
                     bottom_point(point(row + 1, 0), thickness),
@@ -613,6 +657,30 @@ impl<'a> MeshBuilder<'a> {
             indices: self.indices,
             texture: None,
         }
+    }
+}
+
+fn draw_heightfield_chunked(
+    description: &HeightFieldDesc,
+    transform: &PhysicsTransform,
+    color: Color,
+) {
+    if description.rows < 2 || description.columns < 2 {
+        return;
+    }
+    let total_cell_rows = description.rows - 1;
+    let cells_per_row = (description.columns - 1).max(1);
+    let max_indices_per_chunk = 3600usize;
+    let indices_per_row = cells_per_row * if description.thickness.is_some() { 12 } else { 6 } + 24;
+    let rows_per_chunk = (max_indices_per_chunk / indices_per_row.max(1)).clamp(1, total_cell_rows);
+
+    let mut row_start = 0;
+    while row_start < total_cell_rows {
+        let row_end = (row_start + rows_per_chunk).min(total_cell_rows);
+        let mut builder = MeshBuilder::new(transform, color);
+        builder.add_heightfield_rows(description, row_start, row_end);
+        draw_mesh(&builder.finish());
+        row_start = row_end;
     }
 }
 

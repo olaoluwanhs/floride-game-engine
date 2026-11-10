@@ -262,6 +262,42 @@ fn updating_heightfield_phantom_transform_uses_the_public_origin() {
     assert!((moved_transform.position.x - 3.0).abs() < 0.001);
     assert!((moved_transform.position.y - 2.0).abs() < 0.001);
     assert!((moved_transform.position.z - 1.0).abs() < 0.001);
+
+    // Confirm a thin heightfield placed at world origin spans [0..width, 0..depth] just like thick heightfields.
+    let mut ray_world = RapierWorld::new();
+    ray_world
+        .create_static_collider(&StaticColliderDesc {
+            entity_id: Some(EntityId::new(15)),
+            transform: PhysicsTransform::IDENTITY,
+            shape: PrimitiveShape::HeightField(HeightFieldDesc {
+                rows: 2,
+                columns: 2,
+                height_samples: vec![0.0; 4],
+                cell_size_x: 4.0,
+                cell_size_z: 4.0,
+                thickness: None,
+            }),
+        })
+        .unwrap();
+    ray_world.step(1.0 / 60.0).unwrap();
+    let corner_hit = ray_world
+        .raycast(&RayQuery {
+            origin: Vec3::new(3.5, 2.0, 3.5),
+            direction: Vec3::new(0.0, -1.0, 0.0),
+            max_distance: 4.0,
+            ignored_entity: None,
+        })
+        .unwrap();
+    assert!(corner_hit.is_some());
+    let outside_hit = ray_world
+        .raycast(&RayQuery {
+            origin: Vec3::new(-0.5, 2.0, -0.5),
+            direction: Vec3::new(0.0, -1.0, 0.0),
+            max_distance: 4.0,
+            ignored_entity: None,
+        })
+        .unwrap();
+    assert!(outside_hit.is_none());
 }
 
 #[test]
