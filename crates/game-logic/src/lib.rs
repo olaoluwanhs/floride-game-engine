@@ -6,7 +6,11 @@
 //! that individual games construct from their own player controls.
 
 pub mod movement;
+pub mod spatial;
+pub mod vitals;
 
 pub use movement::{
     MovementConfig, MovementIntent, MovementState, step_character_movement, update_velocity,
 };
+pub use spatial::{apply_radial_impulse, has_line_of_sight, linear_falloff, steer_toward};
+pub use vitals::{DamageOutcome, HealthState};

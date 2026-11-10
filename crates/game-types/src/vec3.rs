@@ -31,6 +31,13 @@ impl Vec3 {
         z: 0.0,
     };
 
+    /// Unit vector pointing straight up along the +Y axis.
+    pub const UP: Self = Self {
+        x: 0.0,
+        y: 1.0,
+        z: 0.0,
+    };
+
     /// Creates a vector using the X, Y, and Z numbers provided.
     pub fn new(x_value: f32, y_value: f32, z_value: f32) -> Self {
         Self {
@@ -83,6 +90,42 @@ impl Vec3 {
     pub fn length_squared(&self) -> f32 {
         self.dot_product(self)
     }
+
+    /// Returns the Euclidean length (magnitude) of this vector in meters.
+    pub fn length(&self) -> f32 {
+        self.length_squared().sqrt()
+    }
+
+    /// Returns the Euclidean distance between this point and `other`.
+    pub fn distance_to(&self, other: &Self) -> f32 {
+        self.subtract(other).length()
+    }
+
+    /// Computes the 3D cross product `self × other`.
+    ///
+    /// Returns a vector perpendicular to both input vectors according to the right-hand rule.
+    pub fn cross_product(&self, other: &Self) -> Self {
+        Self::new(
+            self.y * other.z - self.z * other.y,
+            self.z * other.x - self.x * other.z,
+            self.x * other.y - self.y * other.x,
+        )
+    }
+
+    /// Returns a unit-length version of this vector, or `fallback` if near zero length.
+    pub fn normalized_or(&self, fallback: Self) -> Self {
+        let len_sq = self.length_squared();
+        if len_sq.is_finite() && len_sq > 1.0e-8 {
+            self.scale(len_sq.sqrt().recip())
+        } else {
+            fallback
+        }
+    }
+
+    /// Returns a unit-length version of this vector, or [`Vec3::ZERO`] if near zero length.
+    pub fn normalized_or_zero(&self) -> Self {
+        self.normalized_or(Self::ZERO)
+    }
 }
 
 #[cfg(test)]
@@ -102,5 +145,24 @@ mod tests {
         assert_eq!(subtracted_vector, Vec3::new(3.0, 3.0, 3.0));
         assert_eq!(scaled_vector, Vec3::new(2.0, 4.0, 6.0));
         assert_eq!(starting_vector.length_squared(), 14.0);
+    }
+
+    #[test]
+    fn cross_product_distance_and_normalization_work() {
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let y = Vec3::UP;
+        let z = x.cross_product(&y);
+        assert!((z.z - 1.0).abs() < 1e-6);
+
+        let a = Vec3::new(0.0, 0.0, 0.0);
+        let b = Vec3::new(3.0, 4.0, 0.0);
+        assert!((a.distance_to(&b) - 5.0).abs() < 1e-6);
+        assert!((b.length() - 5.0).abs() < 1e-6);
+
+        let normalized = b.normalized_or_zero();
+        assert!((normalized.x - 0.6).abs() < 1e-6);
+        assert!((normalized.y - 0.8).abs() < 1e-6);
+
+        assert_eq!(Vec3::ZERO.normalized_or(Vec3::UP), Vec3::UP);
     }
 }
