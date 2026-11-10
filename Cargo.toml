@@ -5,6 +5,7 @@ members = [
     "crates/physics-rapier",
     "crates/game-api",
     "crates/game-logic",
+    "crates/host-runtime",
     "examples/visual-demo",
 ]
 resolver = "3"

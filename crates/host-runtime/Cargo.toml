@@ -1,0 +1,15 @@
+[package]
+name = "floride-host-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Extensible zero-copy host runtime adapter connecting WASM and Native hosts to GameAdapter"
+
+[dependencies]
+game-api = { path = "../game-api" }
+game-types = { path = "../game-types" }
+
+[dev-dependencies]
+physics-api = { path = "../physics-api" }
+
+[lib]
+crate-type = ["cdylib", "rlib"]

@@ -1,7 +1,15 @@
 [package]
-name = "visual-demo"
+name = "floride-visual-demo"
 version = "0.1.0"
 edition = "2024"
+
+[lib]
+name = "floride_visual_demo"
+path = "src/lib.rs"
+
+[[bin]]
+name = "visual-demo"
+path = "src/main.rs"
 
 [dependencies]
 game-types = { path = "../../crates/game-types" }

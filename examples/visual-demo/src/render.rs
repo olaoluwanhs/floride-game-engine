@@ -13,44 +13,154 @@ use crate::scene::{RayVisual, RenderItem};
 const SHAPE_SEGMENTS: usize = 16;
 const SPHERE_RINGS: usize = 10;
 
-/// An orbit camera that rotates around a central target point.
+/// Configurable camera parameters governing how the view is positioned relative to the target entity.
 ///
-/// In 3D graphics, an orbit camera is easiest to control using spherical coordinates:
-/// - `yaw`: Horizontal rotation angle around the vertical Y axis (looking left/right).
-/// - `pitch`: Vertical elevation angle (looking up/down).
-/// - `distance`: Radial distance from the camera eye to the focal target.
-pub struct OrbitCamera {
-    yaw: f32,
-    pitch: f32,
-    distance: f32,
-    target: Vec3,
+/// Instead of a rigid mode enum, every camera perspective (first-person, third-person over-the-shoulder,
+/// free orbit, or custom) is described by continuous physical offsets.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CameraSettings {
+    /// Vertical height offset above the target entity origin in meters (e.g. eye level = 1.6m).
+    pub height_offset: f32,
+
+    /// Distance behind the target along the reverse look direction in meters.
+    /// - `0.0`: Pure first-person shooter perspective.
+    /// - `> 0.0`: Third-person follow / chase perspective.
+    pub distance: f32,
+
+    /// Lateral shoulder offset in meters.
+    /// - `+0.45`: Over-the-right-shoulder (standard tactical shooter).
+    /// - `-0.45`: Over-the-left-shoulder.
+    /// - `0.0`: Centered.
+    pub shoulder_offset: f32,
+
+    /// Vertical field of view in degrees.
+    pub fov_degrees: f32,
+
+    /// Whether the target entity's mesh should be rendered.
+    /// In first person, this is false so the player's own head capsule does not clip through the lens.
+    pub show_player_mesh: bool,
+
+    /// Minimum zoom distance when using the mouse wheel.
+    pub min_distance: f32,
+
+    /// Maximum zoom distance when using the mouse wheel.
+    pub max_distance: f32,
 }
 
-impl Default for OrbitCamera {
-    fn default() -> Self {
+impl CameraSettings {
+    /// Preset: First-Person Shooter perspective (at character eye level, 0m distance).
+    pub fn first_person() -> Self {
         Self {
-            yaw: 0.75,
-            pitch: 0.55,
-            distance: 30.0,
-            target: vec3(0.0, 1.0, 0.0),
+            height_offset: 1.6,
+            distance: 0.0,
+            shoulder_offset: 0.0,
+            fov_degrees: 75.0,
+            show_player_mesh: false,
+            min_distance: 0.0,
+            max_distance: 0.0,
+        }
+    }
+
+    /// Preset: Third-Person over-the-shoulder perspective.
+    pub fn third_person() -> Self {
+        Self {
+            height_offset: 1.5,
+            distance: 2.5,
+            shoulder_offset: 0.45,
+            fov_degrees: 70.0,
+            show_player_mesh: true,
+            min_distance: 0.8,
+            max_distance: 8.0,
+        }
+    }
+
+    /// Preset: Centered third-person / orbital inspection view.
+    pub fn orbit() -> Self {
+        Self {
+            height_offset: 1.0,
+            distance: 20.0,
+            shoulder_offset: 0.0,
+            fov_degrees: 60.0,
+            show_player_mesh: true,
+            min_distance: 2.0,
+            max_distance: 48.0,
+        }
+    }
+
+    /// Custom mode helper allowing setting arbitrary offsets.
+    pub fn custom(height_offset: f32, distance: f32, shoulder_offset: f32) -> Self {
+        Self {
+            height_offset,
+            distance,
+            shoulder_offset,
+            fov_degrees: 70.0,
+            show_player_mesh: distance > 0.3,
+            min_distance: 0.0,
+            max_distance: 50.0,
         }
     }
 }
 
-impl OrbitCamera {
+impl Default for CameraSettings {
+    fn default() -> Self {
+        Self::orbit()
+    }
+}
+
+/// A versatile 3D camera supporting first-person, third-person, and orbital viewing modes.
+pub struct GameCamera {
+    pub yaw: f32,
+    pub pitch: f32,
+    pub target: Vec3,
+    pub settings: CameraSettings,
+}
+
+/// Alias for backwards compatibility with the original visual demo.
+pub type OrbitCamera = GameCamera;
+
+impl Default for GameCamera {
+    fn default() -> Self {
+        Self {
+            yaw: 0.75,
+            pitch: 0.55,
+            target: vec3(0.0, 1.0, 0.0),
+            settings: CameraSettings::orbit(),
+        }
+    }
+}
+
+impl GameCamera {
+    /// Creates a camera with the specified settings.
+    pub fn new(settings: CameraSettings) -> Self {
+        Self {
+            yaw: 0.0,
+            pitch: 0.0,
+            target: Vec3::ZERO,
+            settings,
+        }
+    }
+
     /// Returns the current horizontal view angle in radians.
-    ///
-    /// Used by `main.rs` to ensure WASD player movement follows the camera's perspective.
     pub fn yaw(&self) -> f32 {
         self.yaw
     }
 
-    /// Updates camera rotation and distance based on keyboard arrow keys and mouse dragging.
+    /// Returns the current vertical view angle in radians.
+    pub fn pitch(&self) -> f32 {
+        self.pitch
+    }
+
+    /// Sets the focal target point (e.g. player position) that the camera tracks.
+    pub fn set_target(&mut self, target: Vec3) {
+        self.target = target;
+    }
+
+    /// Updates camera rotation and zoom distance based on keyboard arrow keys and mouse dragging.
     pub fn update(&mut self, frame_time: f32) {
         let mut yaw_change = 0.0;
         let mut pitch_change = 0.0;
 
-        // Arrow keys allow keyboard-only orbiting.
+        // Arrow keys allow keyboard-only rotating.
         if is_key_down(KeyCode::Left) {
             yaw_change += frame_time;
         }
@@ -64,36 +174,62 @@ impl OrbitCamera {
             pitch_change -= frame_time;
         }
 
-        // Right mouse button dragging allows smooth mouse orbiting.
+        // Right mouse button dragging allows smooth mouse looking/orbiting.
         if is_mouse_button_down(macroquad::prelude::MouseButton::Right) {
             let mouse_delta = mouse_delta_position();
             yaw_change -= mouse_delta.x * 2.5;
-            pitch_change += mouse_delta.y * 2.5;
+            pitch_change -= mouse_delta.y * 2.5;
         }
 
         self.yaw += yaw_change;
-        // Clamp pitch so the camera cannot flip upside down or pass below the floor.
-        self.pitch = (self.pitch + pitch_change).clamp(0.15, 1.35);
 
-        // Mouse wheel controls zoom distance.
-        let (_, wheel_y) = mouse_wheel();
-        self.distance = (self.distance - wheel_y * 1.5).clamp(12.0, 48.0);
+        // Allow free vertical pitch rotation:
+        // - Negative pitch tilts camera high above the character (bird's-eye view looking down).
+        // - Positive pitch tilts camera below character looking up.
+        // Clamped at ±1.54 rad (±88.2°) to prevent vertical gimbal lock with the up vector.
+        self.pitch = (self.pitch + pitch_change).clamp(-1.54, 1.54);
+
+        // Mouse wheel controls zoom distance if zoomable.
+        if self.settings.max_distance > self.settings.min_distance {
+            let (_, wheel_y) = mouse_wheel();
+            self.settings.distance = (self.settings.distance - wheel_y * 1.5)
+                .clamp(self.settings.min_distance, self.settings.max_distance);
+            // Hide player capsule when zoomed very close to eye level.
+            self.settings.show_player_mesh = self.settings.distance > 0.3;
+        }
     }
 
-    /// Converts spherical coordinates (yaw, pitch, distance) into Cartesian (X, Y, Z) coordinates
-    /// and configures a Macroquad `Camera3D`.
-    fn camera(&self) -> Camera3D {
-        let horizontal_distance = self.distance * self.pitch.cos();
-        let position = self.target
-            + vec3(
-                self.yaw.sin() * horizontal_distance,
-                self.pitch.sin() * self.distance,
-                self.yaw.cos() * horizontal_distance,
-            );
+    /// Returns the normalized 3D forward view direction vector.
+    pub fn forward_direction(&self) -> Vec3 {
+        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
+        let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
+        vec3(sin_yaw * cos_pitch, sin_pitch, cos_yaw * cos_pitch)
+    }
+
+    /// Computes the 3D position and orientation for Macroquad's `Camera3D`.
+    pub fn camera(&self) -> Camera3D {
+        let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
+        let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
+
+        // Forward unit vector pointing along the view direction (+Z forward when yaw=0).
+        let forward = vec3(sin_yaw * cos_pitch, sin_pitch, cos_yaw * cos_pitch);
+        let right = vec3(-cos_yaw, 0.0, sin_yaw);
+        let up = vec3(0.0, 1.0, 0.0);
+
+        // Anchor is at the target + height offset + lateral shoulder offset.
+        let anchor = self.target
+            + vec3(0.0, self.settings.height_offset, 0.0)
+            + right * self.settings.shoulder_offset;
+
+        // Position is pulled back along the reverse forward vector by distance.
+        let eye_position = anchor - forward * self.settings.distance;
+        let look_target = eye_position + forward * 10.0;
+
         Camera3D {
-            position,
-            target: self.target,
-            up: vec3(0.0, 1.0, 0.0),
+            position: eye_position,
+            target: look_target,
+            up,
+            fovy: self.settings.fov_degrees.to_radians(),
             ..Default::default()
         }
     }

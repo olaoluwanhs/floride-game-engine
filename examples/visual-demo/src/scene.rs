@@ -15,11 +15,8 @@ const CHARACTER_ENTITY: u64 = 2;
 const FIRST_EXHIBIT_ENTITY: u64 = 10;
 
 /// The role an object plays in the physics simulation.
-///
-/// In Rust, enums can hold data in their variants (algebraic data types / tagged unions).
-/// For example, `Phantom(PhantomBehavior)` stores the sensor's specific behavior mode.
 #[derive(Clone, Copy)]
-enum ObjectKind {
+pub enum ObjectKind {
     /// Immovable geometry that blocks characters and dynamic bodies (e.g. floors, walls).
     Static,
     /// Movable objects driven by mass, gravity, and physical collisions (e.g. rolling balls, crates).
@@ -31,20 +28,21 @@ enum ObjectKind {
 }
 
 /// Metadata tracked by the host application for displaying an object on screen.
-struct DemoObject {
-    label: &'static str,
-    shape: PrimitiveShape,
-    transform: PhysicsTransform,
-    handle: PhysicsHandle,
-    kind: ObjectKind,
-    color: Color,
-    spin_angle: f32,
+pub struct DemoObject {
+    pub label: &'static str,
+    pub shape: PrimitiveShape,
+    pub transform: PhysicsTransform,
+    pub handle: PhysicsHandle,
+    pub kind: ObjectKind,
+    pub color: Color,
+    pub spin_angle: f32,
 }
 
 /// A lightweight render snapshot of a single object sent to the renderer.
 ///
 /// Notice this struct contains zero physics engine internals or Rapier dependencies;
 /// it only describes what shape to draw, where it is in 3D space, and its color.
+#[derive(Clone)]
 pub struct RenderItem {
     pub shape: PrimitiveShape,
     pub transform: PhysicsTransform,
@@ -87,15 +85,14 @@ pub struct Scene {
 }
 
 impl Scene {
-    /// Builds the showcase scene, creating static exhibits, dynamic bodies, a player capsule,
-    /// and rotating phantom sensors in the physics world.
-    pub fn new() -> Result<Self, String> {
-        let mut physics = RapierWorld::new();
+    /// Populates an external physics world with the full showcase exhibits, falling bodies,
+    /// and phantom sensors (without a player character).
+    pub fn populate_environment(physics: &mut RapierWorld) -> Result<Vec<DemoObject>, String> {
         let mut objects = Vec::new();
 
         // 1. Add the immovable ground floor.
         add_static(
-            &mut physics,
+            physics,
             &mut objects,
             "Ground",
             FLOOR_ENTITY,
@@ -118,7 +115,7 @@ impl Scene {
                 0.75
             };
             add_static(
-                &mut physics,
+                physics,
                 &mut objects,
                 label,
                 FIRST_EXHIBIT_ENTITY + index as u64,
@@ -128,7 +125,7 @@ impl Scene {
             )?;
 
             add_dynamic(
-                &mut physics,
+                physics,
                 &mut objects,
                 label,
                 FIRST_EXHIBIT_ENTITY + 20 + index as u64,
@@ -137,6 +134,206 @@ impl Scene {
                 color(0.95, 0.59, 0.24, 1.0),
             )?;
         }
+
+        // 3. Add phantom colliders demonstrating the three sensor modes:
+        // A. OverlapSensor: Senses objects touching its volume (like a coin or doorway trigger).
+        add_phantom(
+            physics,
+            &mut objects,
+            "Overlap sensor",
+            80,
+            PrimitiveShape::Sphere { radius: 1.0 },
+            transform(-6.0, 2.0, 1.5),
+            PhantomBehavior::OverlapSensor,
+            color(0.34, 0.90, 0.60, 0.34),
+        )?;
+
+        // B. RaycastTarget: Invisible/non-solid to objects, but intercepts line-of-sight raycasts.
+        add_phantom(
+            physics,
+            &mut objects,
+            "Raycast target",
+            81,
+            PrimitiveShape::Torus {
+                major_radius: 0.8,
+                tube_radius: 0.22,
+            },
+            transform(0.0, 1.3, -3.0),
+            PhantomBehavior::RaycastTarget,
+            color(0.96, 0.40, 0.72, 0.38),
+        )?;
+
+        // C. OverlapSensorAndRaycastTarget: Senses both physical body overlaps and raycasts.
+        add_phantom(
+            physics,
+            &mut objects,
+            "Overlap + ray target",
+            82,
+            PrimitiveShape::HeightField(HeightFieldDesc {
+                rows: 3,
+                columns: 3,
+                height_samples: vec![0.0, 0.15, 0.0, 0.1, 0.35, 0.1, 0.0, 0.15, 0.0],
+                cell_size_x: 0.75,
+                cell_size_z: 0.75,
+                thickness: Some(0.25),
+            }),
+            transform(5.0, 1.3, -3.0),
+            PhantomBehavior::OverlapSensorAndRaycastTarget,
+            color(0.30, 0.85, 0.96, 0.40),
+        )?;
+
+        Ok(objects)
+    }
+
+    /// Animates phantom sensors and queries active raycasts (including player aim line-of-sight).
+    pub fn update_environment(
+        physics: &mut RapierWorld,
+        objects: &mut [DemoObject],
+        player_ray: Option<(Vec3, Vec3)>,
+        time_step: f32,
+    ) -> Result<Vec<RayVisual>, String> {
+        // 1. Rotate phantom sensors.
+        for object in objects.iter_mut() {
+            let ObjectKind::Phantom(_) = object.kind else {
+                continue;
+            };
+            object.spin_angle += 0.8 * time_step;
+            let half_angle = object.spin_angle * 0.5;
+            object.transform.rotation =
+                Quaternion::new(0.0, half_angle.sin(), 0.0, half_angle.cos());
+
+            physics
+                .set_phantom_transform(object.handle, &object.transform)
+                .map_err(display_error)?;
+        }
+
+        let mut active_rays = Vec::new();
+
+        // 2. Cast downward sensor rays through phantoms.
+        for object in objects.iter() {
+            let ObjectKind::Phantom(behavior) = object.kind else {
+                continue;
+            };
+
+            if matches!(
+                behavior,
+                PhantomBehavior::RaycastTarget | PhantomBehavior::OverlapSensorAndRaycastTarget
+            ) {
+                let local_ray_offset = match &object.shape {
+                    PrimitiveShape::Torus { major_radius, .. } => {
+                        Vec3::new(*major_radius, 0.0, 0.0)
+                    }
+                    PrimitiveShape::HeightField(description) => Vec3::new(
+                        description.cell_size_x * (description.columns - 1) as f32 * 0.5,
+                        0.0,
+                        description.cell_size_z * (description.rows - 1) as f32 * 0.5,
+                    ),
+                    _ => Vec3::ZERO,
+                };
+                let yaw = 2.0
+                    * object
+                        .transform
+                        .rotation
+                        .y
+                        .atan2(object.transform.rotation.w);
+                let (sin_yaw, cos_yaw) = yaw.sin_cos();
+                let ray_world_x = cos_yaw * local_ray_offset.x + sin_yaw * local_ray_offset.z;
+                let ray_world_z = -sin_yaw * local_ray_offset.x + cos_yaw * local_ray_offset.z;
+
+                let query = RayQuery {
+                    origin: Vec3::new(
+                        object.transform.position.x + ray_world_x,
+                        object.transform.position.y + 3.0,
+                        object.transform.position.z + ray_world_z,
+                    ),
+                    direction: Vec3::new(0.0, -1.0, 0.0),
+                    max_distance: 6.0,
+                    ignored_entity: None,
+                };
+
+                let hits = physics.raycast_phantoms(&query).map_err(display_error)?;
+                let (target, hit_visual) = if let Some(first_hit) = hits.first() {
+                    (
+                        first_hit.point,
+                        Some(RayHitVisual {
+                            point: first_hit.point,
+                            normal: first_hit.surface_normal,
+                        }),
+                    )
+                } else {
+                    let max_displacement = query.direction.scale(query.max_distance);
+                    (query.origin.add(&max_displacement), None)
+                };
+
+                active_rays.push(RayVisual {
+                    origin: query.origin,
+                    target,
+                    hit: hit_visual,
+                });
+            }
+        }
+
+        // 3. Line-of-sight raycast from the player's weapon/eye position.
+        if let Some((origin, direction)) = player_ray {
+            let player_query = RayQuery {
+                origin,
+                direction,
+                max_distance: 50.0,
+                ignored_entity: None,
+            };
+
+            let physical_hit = physics.raycast(&player_query).map_err(display_error)?;
+            let (target, hit_visual) = if let Some(hit) = physical_hit {
+                (
+                    hit.point,
+                    Some(RayHitVisual {
+                        point: hit.point,
+                        normal: hit.surface_normal,
+                    }),
+                )
+            } else {
+                let max_displacement = direction.scale(player_query.max_distance);
+                (origin.add(&max_displacement), None)
+            };
+
+            active_rays.push(RayVisual {
+                origin,
+                target,
+                hit: hit_visual,
+            });
+        }
+
+        Ok(active_rays)
+    }
+
+    /// Renders a slice of demo objects by querying their updated transforms from the physics engine.
+    pub fn render_objects(
+        physics: &RapierWorld,
+        objects: &[DemoObject],
+    ) -> Result<Vec<RenderItem>, String> {
+        objects
+            .iter()
+            .map(|object| {
+                let transform = match object.kind {
+                    ObjectKind::Static | ObjectKind::Phantom(_) => object.transform,
+                    ObjectKind::Dynamic | ObjectKind::Character => physics
+                        .body_transform(object.handle)
+                        .map_err(display_error)?,
+                };
+                Ok(RenderItem {
+                    shape: object.shape.clone(),
+                    transform,
+                    color: object.color,
+                })
+            })
+            .collect()
+    }
+
+    /// Builds the showcase scene, creating static exhibits, dynamic bodies, a player capsule,
+    /// and rotating phantom sensors in the physics world.
+    pub fn new() -> Result<Self, String> {
+        let mut physics = RapierWorld::new();
+        let mut objects = Self::populate_environment(&mut physics)?;
 
         // 3. Add the player character (capsule shape) using a kinematic character controller.
         let character_shape = PrimitiveShape::Capsule {
@@ -161,54 +358,6 @@ impl Scene {
             color: color(0.95, 0.91, 0.42, 1.0),
             spin_angle: 0.0,
         });
-
-        // 4. Add phantom colliders demonstrating the three sensor modes:
-        // A. OverlapSensor: Senses objects touching its volume (like a coin or doorway trigger).
-        add_phantom(
-            &mut physics,
-            &mut objects,
-            "Overlap sensor",
-            80,
-            PrimitiveShape::Sphere { radius: 1.0 },
-            transform(-6.0, 2.0, 1.5),
-            PhantomBehavior::OverlapSensor,
-            color(0.34, 0.90, 0.60, 0.34),
-        )?;
-
-        // B. RaycastTarget: Invisible/non-solid to objects, but intercepts line-of-sight raycasts
-        //    (useful for hitboxes on holographic shields or interactive consoles).
-        add_phantom(
-            &mut physics,
-            &mut objects,
-            "Raycast target",
-            81,
-            PrimitiveShape::Torus {
-                major_radius: 0.8,
-                tube_radius: 0.22,
-            },
-            transform(0.0, 1.3, -3.0),
-            PhantomBehavior::RaycastTarget,
-            color(0.96, 0.40, 0.72, 0.38),
-        )?;
-
-        // C. OverlapSensorAndRaycastTarget: Senses both physical body overlaps and raycasts.
-        add_phantom(
-            &mut physics,
-            &mut objects,
-            "Overlap + ray target",
-            82,
-            PrimitiveShape::HeightField(HeightFieldDesc {
-                rows: 3,
-                columns: 3,
-                height_samples: vec![0.0, 0.15, 0.0, 0.1, 0.35, 0.1, 0.0, 0.15, 0.0],
-                cell_size_x: 0.75,
-                cell_size_z: 0.75,
-                thickness: Some(0.25),
-            }),
-            transform(5.0, 1.3, -3.0),
-            PhantomBehavior::OverlapSensorAndRaycastTarget,
-            color(0.30, 0.85, 0.96, 0.40),
-        )?;
 
         Ok(Self {
             physics,
@@ -448,23 +597,7 @@ impl Scene {
     /// - Dynamic rigid bodies and Character controllers query `body_transform` from the physics engine
     ///   to get the exact position and orientation calculated by the simulation.
     pub fn render_items(&self) -> Result<Vec<RenderItem>, String> {
-        self.objects
-            .iter()
-            .map(|object| {
-                let transform = match object.kind {
-                    ObjectKind::Static | ObjectKind::Phantom(_) => object.transform,
-                    ObjectKind::Dynamic | ObjectKind::Character => self
-                        .physics
-                        .body_transform(object.handle)
-                        .map_err(display_error)?,
-                };
-                Ok(RenderItem {
-                    shape: object.shape.clone(),
-                    transform,
-                    color: object.color,
-                })
-            })
-            .collect()
+        Self::render_objects(&self.physics, &self.objects)
     }
 
     /// Formats current simulation status for the on-screen heads-up display (HUD).
