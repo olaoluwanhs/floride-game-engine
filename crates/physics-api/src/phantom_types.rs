@@ -1,4 +1,5 @@
 use game_types::{EntityId, Vec3};
+use serde::{Deserialize, Serialize};
 
 use crate::{PhysicsTransform, PrimitiveShape};
 
@@ -7,7 +8,7 @@ use crate::{PhysicsTransform, PrimitiveShape};
 /// A phantom collider has a shape and position, but it does not physically push
 /// or stop other objects. Use an overlap behavior to notice entities inside it,
 /// or a raycast behavior to notice rays passing through it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PhantomBehavior {
     /// Detects entities that are currently inside or touching this phantom.
     OverlapSensor,

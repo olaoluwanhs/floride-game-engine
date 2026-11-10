@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 /// Three numbers that represent a position, direction, or movement amount.
 ///
 /// Game coordinates use meters for distance, and the Y axis points up. This
@@ -13,7 +15,7 @@
 /// vector while debugging, `Default` creates a vector whose components are all
 /// zero, `Clone` and `Copy` allow vectors to be copied, and `PartialEq` allows
 /// their components to be compared in tests.
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Vec3 {
     /// The X component, commonly used for left and right in world coordinates.
     pub x: f32,

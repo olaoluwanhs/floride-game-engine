@@ -1,11 +1,12 @@
 use game_types::Vec3;
+use serde::{Deserialize, Serialize};
 
 use crate::height_field_type::HeightFieldDesc;
 
 /// Half-width and half-depth for a finite plane.
 ///
 /// The plane itself lies in the local XZ plane, so it has no Y extent.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlaneHalfExtents {
     /// Distance from the plane's center to its edge along local X, in meters.
     pub half_width_x: f32,
@@ -24,7 +25,7 @@ pub struct PlaneHalfExtents {
 /// A torus is included as a useful game shape, but it may need to be
 /// approximated by several simpler colliders when a physics engine does not
 /// support it directly. That engine-specific choice belongs in the adapter.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PrimitiveShape {
     /// A box. Each value is the distance from its center to one side.
     ///

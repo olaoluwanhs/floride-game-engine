@@ -5,10 +5,17 @@
 //! does not impose a fixed command enum. Instead, systems consume generic intents
 //! that individual games construct from their own player controls.
 
+pub mod level;
 pub mod movement;
 pub mod spatial;
 pub mod vitals;
 
+pub use level::{
+    LEVEL_WORLD_SCHEMA_VERSION, LevelColor, LevelDynamicObject, LevelMarker, LevelStaticObject,
+    LevelTriggerVolume, LevelWorldSpec, SpawnedDynamicBody, SpawnedLevelWorld, SpawnedStaticObject,
+    SpawnedTrigger, TerrainFloorOptions, TerrainPreset, generate_heightfield_floor,
+    sample_heightfield_y, spawn_level_world,
+};
 pub use movement::{
     MovementConfig, MovementIntent, MovementState, step_character_movement, update_velocity,
 };

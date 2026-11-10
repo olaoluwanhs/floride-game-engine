@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 game-types = { path = "../game-types" }
+serde = { version = "1.0", features = ["derive"] }

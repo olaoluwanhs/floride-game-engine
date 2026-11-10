@@ -8,6 +8,7 @@
 
 use game_types::Vec3;
 use physics_api::{CharacterMoveResult, PhysicsError, PhysicsHandle, PhysicsWorld};
+use serde::{Deserialize, Serialize};
 
 /// A game-neutral request describing how an entity wants to move during a tick.
 ///
@@ -39,7 +40,7 @@ impl Default for MovementIntent {
 }
 
 /// Tunable settings that define how responsive or heavy movement feels.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MovementConfig {
     /// Normal walking speed on the ground, in meters per second.
     pub walk_speed: f32,

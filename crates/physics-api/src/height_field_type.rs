@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 /// Height samples and spacing that describe a grid-shaped collision surface.
 ///
 /// The first sample is at local X=0 and Z=0. Columns move along positive X;
@@ -13,7 +15,7 @@
 /// `rows * columns` finite height samples, and positive finite spacing values.
 /// Whether a physics engine supports this shape in a particular object type is
 /// decided by that engine's adapter.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HeightFieldDesc {
     /// Number of rows, which extend along the local Z axis.
     pub rows: usize,

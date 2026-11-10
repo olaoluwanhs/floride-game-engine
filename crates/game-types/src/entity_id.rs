@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 /// A unique number used by the game to identify an entity.
 ///
 /// An entity is an object in the game world, such as a player, enemy, or
@@ -11,7 +13,7 @@
 /// `Debug` helps display it while debugging, `Clone` and `Copy` allow the small
 /// ID value to be copied, `PartialEq` and `Eq` allow IDs to be compared, and
 /// `Hash` allows IDs to be used as keys in hash-based collections.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EntityId {
     value: u64,
 }

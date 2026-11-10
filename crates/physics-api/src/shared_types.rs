@@ -1,4 +1,5 @@
 use game_types::Vec3;
+use serde::{Deserialize, Serialize};
 
 /// A rotation represented by four numbers called a quaternion.
 ///
@@ -6,7 +7,7 @@ use game_types::Vec3;
 /// when combining three Euler angles. A valid rotation is normalized, meaning
 /// its four values have a combined length of approximately one. Physics
 /// implementations must validate rotation values they receive.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Quaternion {
     /// The X component of the rotation.
     pub x: f32,
@@ -90,7 +91,7 @@ impl Quaternion {
 }
 
 /// A position and orientation in the game world.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PhysicsTransform {
     /// The object's position in meters.
     pub position: Vec3,
@@ -108,6 +109,14 @@ impl PhysicsTransform {
     /// Creates a transform from a position and rotation.
     pub fn new(position: Vec3, rotation: Quaternion) -> Self {
         Self { position, rotation }
+    }
+
+    /// Creates an unrotated transform at `position`.
+    pub fn from_position(position: Vec3) -> Self {
+        Self {
+            position,
+            rotation: Quaternion::IDENTITY,
+        }
     }
 }
 

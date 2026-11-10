@@ -511,8 +511,8 @@ impl<'a> MeshBuilder<'a> {
                 let p10 = point(row + 1, column);
                 let p01 = point(row, column + 1);
                 let p11 = point(row + 1, column + 1);
-                self.add_triangle(p00, p10, p01);
-                self.add_triangle(p10, p11, p01);
+                self.add_terrain_triangle(p00, p10, p01);
+                self.add_terrain_triangle(p10, p11, p01);
                 if let Some(thickness) = description.thickness {
                     self.add_triangle(
                         bottom_point(p00, thickness),
@@ -568,15 +568,40 @@ impl<'a> MeshBuilder<'a> {
         self.add_triangle(first, third, fourth);
     }
 
+    /// Adds a terrain triangle modulated by face slope and elevation so uneven hills stand out.
+    fn add_terrain_triangle(&mut self, first: Vec3, second: Vec3, third: Vec3) {
+        let edge_a = second - first;
+        let edge_b = third - first;
+        let mut normal = edge_a.cross(edge_b).normalize_or_zero();
+        if normal.y < 0.0 {
+            normal = -normal;
+        }
+        let sun = vec3(0.45, 0.85, 0.35).normalize();
+        let light = 0.62 + 0.38 * normal.dot(sun).max(0.0);
+        let avg_y = (first.y + second.y + third.y) / 3.0;
+        let height_tint = (avg_y * 0.035).clamp(-0.12, 0.18);
+        let shaded = Color::new(
+            (self.color.r * light + height_tint * 0.5).clamp(0.0, 1.0),
+            (self.color.g * light + height_tint * 0.8).clamp(0.0, 1.0),
+            (self.color.b * light + height_tint * 0.3).clamp(0.0, 1.0),
+            self.color.a,
+        );
+        self.add_tinted_triangle(first, second, third, shaded);
+    }
+
     /// Adds a triangle to the mesh, transforming each vertex from local model space into world space.
     fn add_triangle(&mut self, first: Vec3, second: Vec3, third: Vec3) {
+        self.add_tinted_triangle(first, second, third, self.color);
+    }
+
+    fn add_tinted_triangle(&mut self, first: Vec3, second: Vec3, third: Vec3, color: Color) {
         let base = self.vertices.len() as u16;
         for point in [first, second, third] {
             // Apply rotation and world position:
             // world_pos = (rotation * local_point) + position
             let world_position = self.rotation * point + to_macroquad(self.transform.position);
             self.vertices
-                .push(Vertex::new2(world_position, Vec2::ZERO, self.color));
+                .push(Vertex::new2(world_position, Vec2::ZERO, color));
         }
         self.indices.extend_from_slice(&[base, base + 1, base + 2]);
     }

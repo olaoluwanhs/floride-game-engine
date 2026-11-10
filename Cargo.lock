@@ -191,11 +191,15 @@ version = "0.1.0"
 dependencies = [
  "game-types",
  "physics-api",
+ "serde",
 ]
 
 [[package]]
 name = "game-types"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "glam"
@@ -544,6 +548,7 @@ name = "physics-api"
 version = "0.1.0"
 dependencies = [
  "game-types",
+ "serde",
 ]
 
 [[package]]
