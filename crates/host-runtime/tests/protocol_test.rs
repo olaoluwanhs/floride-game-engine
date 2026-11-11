@@ -1,6 +1,15 @@
 use floride_host_runtime::{
-    ActionDecoder, ActionError, ActionPacket, HostSession, ProtocolError, SnapshotEncoder,
-    TlvReader, TlvWriter, CHUNK_COMBAT, CHUNK_EVENTS, CHUNK_TRANSFORMS, MAGIC,
+    decode_blemishes, decode_enemies, decode_entity_metadata, decode_explosives, decode_mode,
+    decode_pickups, decode_projectiles, decode_world_transforms, encode_blemishes, encode_enemies,
+    encode_entity_metadata, encode_explosives, encode_mode, encode_pickups, encode_projectiles,
+    encode_world_transforms, ActionDecoder, ActionError, ActionPacket, BlemishRecord,
+    EnemyAimRayRecord, EnemyCombatRecord, EntityMetadataRecord, ExplosiveRecord, HostSession,
+    ModeRecord, ObjectiveRecord, PickupRecord, ProjectileRecord, ProtocolError, SnapshotEncoder,
+    TlvReader, TlvWriter, WorldTransformRecord, CHUNK_BLEMISHES, CHUNK_COMBAT, CHUNK_ENEMIES,
+    CHUNK_ENTITY_METADATA, CHUNK_EVENTS, CHUNK_EXPLOSIVES, CHUNK_MODE, CHUNK_PICKUPS,
+    CHUNK_PROJECTILES, CHUNK_TRANSFORMS, CHUNK_WORLD_TRANSFORMS, ENEMY_BEHAVIOR_ATTACK,
+    ENTITY_KIND_DYNAMIC, ENTITY_KIND_ENEMY, ENTITY_KIND_STATIC, MAGIC, MATCH_STATUS_ACTIVE,
+    PICKUP_KIND_AMMO, PICKUP_KIND_HEALTH,
 };
 use game_api::GameAdapter;
 use game_types::Vec3;
@@ -77,7 +86,10 @@ fn test_multi_chunk_composition_and_discovery() {
 #[test]
 fn test_malformed_protocol_buffers() {
     // Buffer too short for header
-    assert_eq!(TlvReader::new(&[0u8; 10]), Err(ProtocolError::BufferTooShort));
+    assert_eq!(
+        TlvReader::new(&[0u8; 10]),
+        Err(ProtocolError::BufferTooShort)
+    );
 
     // Bad magic
     let bad_magic = [0u8; 16];
@@ -148,34 +160,59 @@ fn test_action_packet_parsing() {
 struct StubPhysics;
 
 impl PhysicsWorld for StubPhysics {
-    fn create_static_collider(&mut self, _desc: &StaticColliderDesc) -> Result<PhysicsHandle, PhysicsError> {
+    fn create_static_collider(
+        &mut self,
+        _desc: &StaticColliderDesc,
+    ) -> Result<PhysicsHandle, PhysicsError> {
         Ok(PhysicsHandle::new(1))
     }
     fn remove_static_collider(&mut self, _handle: PhysicsHandle) -> Result<(), PhysicsError> {
         Ok(())
     }
-    fn create_phantom_collider(&mut self, _desc: &PhantomColliderDesc) -> Result<PhysicsHandle, PhysicsError> {
+    fn create_phantom_collider(
+        &mut self,
+        _desc: &PhantomColliderDesc,
+    ) -> Result<PhysicsHandle, PhysicsError> {
         Ok(PhysicsHandle::new(2))
     }
-    fn set_phantom_transform(&mut self, _handle: PhysicsHandle, _transform: &PhysicsTransform) -> Result<(), PhysicsError> {
+    fn set_phantom_transform(
+        &mut self,
+        _handle: PhysicsHandle,
+        _transform: &PhysicsTransform,
+    ) -> Result<(), PhysicsError> {
         Ok(())
     }
     fn remove_phantom_collider(&mut self, _handle: PhysicsHandle) -> Result<(), PhysicsError> {
         Ok(())
     }
-    fn phantom_overlaps(&self, _handle: PhysicsHandle) -> Result<Vec<PhantomOverlap>, PhysicsError> {
+    fn phantom_overlaps(
+        &self,
+        _handle: PhysicsHandle,
+    ) -> Result<Vec<PhantomOverlap>, PhysicsError> {
         Ok(Vec::new())
     }
-    fn create_dynamic_body(&mut self, _desc: &DynamicBodyDesc) -> Result<PhysicsHandle, PhysicsError> {
+    fn create_dynamic_body(
+        &mut self,
+        _desc: &DynamicBodyDesc,
+    ) -> Result<PhysicsHandle, PhysicsError> {
         Ok(PhysicsHandle::new(3))
     }
     fn remove_dynamic_body(&mut self, _handle: PhysicsHandle) -> Result<(), PhysicsError> {
         Ok(())
     }
-    fn apply_impulse(&mut self, _handle: PhysicsHandle, _impulse: &Vec3) -> Result<(), PhysicsError> {
+    fn apply_impulse(
+        &mut self,
+        _handle: PhysicsHandle,
+        _impulse: &Vec3,
+    ) -> Result<(), PhysicsError> {
         Ok(())
     }
-    fn apply_impulse_at_point(&mut self, _handle: PhysicsHandle, _impulse: &Vec3, _point: &Vec3) -> Result<(), PhysicsError> {
+    fn apply_impulse_at_point(
+        &mut self,
+        _handle: PhysicsHandle,
+        _impulse: &Vec3,
+        _point: &Vec3,
+    ) -> Result<(), PhysicsError> {
         Ok(())
     }
     fn create_character(&mut self, _desc: &CharacterDesc) -> Result<PhysicsHandle, PhysicsError> {
@@ -184,7 +221,11 @@ impl PhysicsWorld for StubPhysics {
     fn remove_character(&mut self, _handle: PhysicsHandle) -> Result<(), PhysicsError> {
         Ok(())
     }
-    fn move_character(&mut self, _handle: PhysicsHandle, _displacement: &Vec3) -> Result<CharacterMoveResult, PhysicsError> {
+    fn move_character(
+        &mut self,
+        _handle: PhysicsHandle,
+        _displacement: &Vec3,
+    ) -> Result<CharacterMoveResult, PhysicsError> {
         Ok(CharacterMoveResult {
             applied_displacement: Vec3::ZERO,
             is_grounded: true,
@@ -315,7 +356,9 @@ fn test_host_session_full_lifecycle() {
     let mut look_payload = Vec::new();
     look_payload.extend_from_slice(&1.57f32.to_le_bytes());
     look_payload.extend_from_slice(&(-0.5f32).to_le_bytes());
-    session.dispatch_action(0x0001, &look_payload).expect("dispatch look");
+    session
+        .dispatch_action(0x0001, &look_payload)
+        .expect("dispatch look");
 
     // Dispatch fire action
     session.dispatch_action(0x0010, &[]).expect("dispatch fire");
@@ -334,4 +377,222 @@ fn test_host_session_full_lifecycle() {
     assert!((yaw - 1.57).abs() < 1e-5);
     assert!((pitch - (-0.5)).abs() < 1e-5);
     assert_eq!(shots, 1);
+}
+
+#[test]
+fn test_world_transforms_and_entity_metadata_chunks_roundtrip() {
+    let transforms = vec![
+        WorldTransformRecord {
+            entity_id: 200,
+            entity_kind: ENTITY_KIND_DYNAMIC,
+            position: [1.5, 2.0, -3.5],
+            rotation: [0.0, 0.38268343, 0.0, 0.9238795],
+        },
+        WorldTransformRecord {
+            entity_id: 500,
+            entity_kind: ENTITY_KIND_ENEMY,
+            position: [-4.0, 1.0, 8.0],
+            rotation: [0.0, 1.0, 0.0, 0.0],
+        },
+    ];
+    let metadata = vec![
+        EntityMetadataRecord {
+            entity_id: 200,
+            entity_kind: ENTITY_KIND_DYNAMIC,
+            name: "wood_crate_custom".to_owned(),
+        },
+        EntityMetadataRecord {
+            entity_id: 100,
+            entity_kind: ENTITY_KIND_STATIC,
+            name: "bunker_wall".to_owned(),
+        },
+    ];
+
+    let mut writer = TlvWriter::new();
+    writer.start_snapshot(77);
+    writer.write_chunk(
+        CHUNK_WORLD_TRANSFORMS,
+        0,
+        &encode_world_transforms(&transforms),
+    );
+    writer.write_chunk(CHUNK_ENTITY_METADATA, 0, &encode_entity_metadata(&metadata));
+
+    let reader = TlvReader::new(writer.as_slice()).unwrap();
+    let tf_chunk = reader.find_chunk(CHUNK_WORLD_TRANSFORMS).unwrap().unwrap();
+    let md_chunk = reader.find_chunk(CHUNK_ENTITY_METADATA).unwrap().unwrap();
+    assert_eq!(
+        decode_world_transforms(tf_chunk.payload).unwrap(),
+        transforms
+    );
+    assert_eq!(decode_entity_metadata(md_chunk.payload).unwrap(), metadata);
+
+    // Truncated buffers must return CorruptedChunk error cleanly.
+    assert!(decode_world_transforms(&[1, 0]).is_err());
+    assert!(decode_entity_metadata(&tf_chunk.payload[..2]).is_err());
+}
+
+#[test]
+fn test_extended_snapshot_chunks_roundtrip_and_truncation_safety() {
+    let enemies = vec![
+        EnemyCombatRecord {
+            entity_id: 500,
+            health: 75.0,
+            max_health: 100.0,
+            is_alive: true,
+            behavior: ENEMY_BEHAVIOR_ATTACK,
+            capsule_radius: 0.45,
+            capsule_height: 1.8,
+            active_weapon_id: 2,
+            ammo: 1,
+            reserve_ammo: 5,
+            is_reloading: false,
+            active_weapon_name: "Rocket Launcher".to_owned(),
+            aim_ray: Some(EnemyAimRayRecord {
+                origin: [1.0, 1.7, -10.0],
+                end_point: [0.0, 1.2, 5.0],
+                direction: [-0.06, -0.03, 0.99],
+                hits_player: true,
+                is_firing_soon: true,
+            }),
+        },
+        EnemyCombatRecord {
+            entity_id: 501,
+            health: 0.0,
+            max_health: 100.0,
+            is_alive: false,
+            behavior: 4,
+            capsule_radius: 0.45,
+            capsule_height: 1.8,
+            active_weapon_id: 1,
+            ammo: 0,
+            reserve_ammo: 0,
+            is_reloading: false,
+            active_weapon_name: "Assault Rifle".to_owned(),
+            aim_ray: None,
+        },
+    ];
+    let projectiles = vec![ProjectileRecord {
+        id: 11,
+        position: [2.0, 1.5, -3.0],
+        velocity: [0.0, 0.0, 30.0],
+        radius: 0.15,
+        is_alive: true,
+    }];
+    let explosives = vec![ExplosiveRecord {
+        id: 22,
+        entity_id: 100_022,
+        position: [-1.0, 0.4, 2.0],
+        radius: 0.18,
+        fuse_ticks_remaining: 42,
+        max_fuse_ticks: 150,
+    }];
+    let blemishes = vec![BlemishRecord {
+        id: 33,
+        entity_id: 100,
+        position: [0.5, 1.1, -5.5],
+        normal: [0.0, 0.0, 1.0],
+        radius: 0.11,
+        remaining_ticks: 240,
+        max_ticks: 300,
+    }];
+    let mode = ModeRecord {
+        mode_name: "Story".to_owned(),
+        status: MATCH_STATUS_ACTIVE,
+        outcome_reason: None,
+        current_wave: 2,
+        total_waves: 5,
+        breather_ticks_remaining: 120,
+        score: 450,
+        enemies_eliminated: 6,
+        time_remaining_ticks: Some(3600),
+        objectives: vec![ObjectiveRecord {
+            id: "extract".to_owned(),
+            description: "Reach extraction zone".to_owned(),
+            completed: false,
+            progress: 0,
+            target: 1,
+        }],
+    };
+    let pickups = vec![
+        PickupRecord {
+            id: 1,
+            position: [-6.0, 0.6, 0.0],
+            yaw: 0.0,
+            radius: 1.5,
+            is_available: true,
+            kind_tag: PICKUP_KIND_HEALTH,
+            health_amount: 40.0,
+            weapon_id: 0,
+            reserve_rounds: 0,
+        },
+        PickupRecord {
+            id: 2,
+            position: [6.0, 0.6, 0.0],
+            yaw: 1.5,
+            radius: 1.5,
+            is_available: false,
+            kind_tag: PICKUP_KIND_AMMO,
+            health_amount: 0.0,
+            weapon_id: 2,
+            reserve_rounds: 4,
+        },
+    ];
+
+    let mut writer = TlvWriter::new();
+    writer.start_snapshot(99);
+    writer.write_chunk(CHUNK_ENEMIES, 0, &encode_enemies(&enemies));
+    writer.write_chunk(CHUNK_PROJECTILES, 0, &encode_projectiles(&projectiles));
+    writer.write_chunk(CHUNK_EXPLOSIVES, 0, &encode_explosives(&explosives));
+    writer.write_chunk(CHUNK_BLEMISHES, 0, &encode_blemishes(&blemishes));
+    writer.write_chunk(CHUNK_MODE, 0, &encode_mode(&mode));
+    writer.write_chunk(CHUNK_PICKUPS, 0, &encode_pickups(&pickups));
+
+    let reader = TlvReader::new(writer.as_slice()).unwrap();
+    assert_eq!(reader.chunk_count(), 6);
+    assert_eq!(
+        decode_enemies(reader.find_chunk(CHUNK_ENEMIES).unwrap().unwrap().payload).unwrap(),
+        enemies
+    );
+    assert_eq!(
+        decode_projectiles(
+            reader
+                .find_chunk(CHUNK_PROJECTILES)
+                .unwrap()
+                .unwrap()
+                .payload
+        )
+        .unwrap(),
+        projectiles
+    );
+    assert_eq!(
+        decode_explosives(
+            reader
+                .find_chunk(CHUNK_EXPLOSIVES)
+                .unwrap()
+                .unwrap()
+                .payload
+        )
+        .unwrap(),
+        explosives
+    );
+    assert_eq!(
+        decode_blemishes(reader.find_chunk(CHUNK_BLEMISHES).unwrap().unwrap().payload).unwrap(),
+        blemishes
+    );
+    assert_eq!(
+        decode_mode(reader.find_chunk(CHUNK_MODE).unwrap().unwrap().payload).unwrap(),
+        mode
+    );
+    assert_eq!(
+        decode_pickups(reader.find_chunk(CHUNK_PICKUPS).unwrap().unwrap().payload).unwrap(),
+        pickups
+    );
+
+    // Truncated payloads for each chunk must return Err without panicking.
+    assert!(decode_enemies(&[1, 0, 0, 0, 1]).is_err());
+    assert!(decode_projectiles(&[1, 0, 0, 0, 1]).is_err());
+    assert!(decode_explosives(&[1, 0, 0, 0, 1]).is_err());
+    assert!(decode_blemishes(&[1, 0, 0, 0, 1]).is_err());
+    assert!(decode_mode(&[5, 0, b'a']).is_err());
+    assert!(decode_pickups(&[1, 0, 0, 0, 1]).is_err());
 }

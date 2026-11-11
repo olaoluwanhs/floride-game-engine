@@ -1,8 +1,12 @@
 use floride_host_runtime::{
-    floride_session_destroy, floride_session_dispatch_action, floride_session_snapshot_len,
-    floride_session_snapshot_ptr, floride_session_tick, ActionDecoder, ActionError, ActionPacket,
-    FlorideSessionHandle, HostSession, SnapshotEncoder, TlvReader, TlvWriter, CHUNK_TRANSFORMS,
-    FLORIDE_ERR_ACTION_FAILED, FLORIDE_ERR_NULL_PTR, FLORIDE_OK,
+    floride_abi_version, floride_alloc, floride_copy_last_error, floride_dealloc,
+    floride_last_error_len, floride_last_error_ptr, floride_protocol_version,
+    floride_session_copy_snapshot, floride_session_destroy, floride_session_dispatch_action,
+    floride_session_snapshot_len, floride_session_snapshot_ptr, floride_session_tick,
+    ActionDecoder, ActionError, ActionPacket, AnySession, FlorideSessionHandle, HostError,
+    HostSession, SnapshotEncoder, TlvReader, TlvWriter, CHUNK_TRANSFORMS, FLORIDE_ABI_VERSION,
+    FLORIDE_ERR_ACTION_FAILED, FLORIDE_ERR_INVALID_ARGUMENT, FLORIDE_ERR_NULL_PTR,
+    FLORIDE_ERR_PANIC, FLORIDE_OK, PROTOCOL_VERSION,
 };
 use game_api::GameAdapter;
 use game_types::Vec3;
@@ -18,34 +22,59 @@ use physics_api::{
 
 struct StubPhysics;
 impl PhysicsWorld for StubPhysics {
-    fn create_static_collider(&mut self, _desc: &StaticColliderDesc) -> Result<PhysicsHandle, PhysicsError> {
+    fn create_static_collider(
+        &mut self,
+        _desc: &StaticColliderDesc,
+    ) -> Result<PhysicsHandle, PhysicsError> {
         Ok(PhysicsHandle::new(1))
     }
     fn remove_static_collider(&mut self, _handle: PhysicsHandle) -> Result<(), PhysicsError> {
         Ok(())
     }
-    fn create_phantom_collider(&mut self, _desc: &PhantomColliderDesc) -> Result<PhysicsHandle, PhysicsError> {
+    fn create_phantom_collider(
+        &mut self,
+        _desc: &PhantomColliderDesc,
+    ) -> Result<PhysicsHandle, PhysicsError> {
         Ok(PhysicsHandle::new(2))
     }
-    fn set_phantom_transform(&mut self, _handle: PhysicsHandle, _transform: &PhysicsTransform) -> Result<(), PhysicsError> {
+    fn set_phantom_transform(
+        &mut self,
+        _handle: PhysicsHandle,
+        _transform: &PhysicsTransform,
+    ) -> Result<(), PhysicsError> {
         Ok(())
     }
     fn remove_phantom_collider(&mut self, _handle: PhysicsHandle) -> Result<(), PhysicsError> {
         Ok(())
     }
-    fn phantom_overlaps(&self, _handle: PhysicsHandle) -> Result<Vec<PhantomOverlap>, PhysicsError> {
+    fn phantom_overlaps(
+        &self,
+        _handle: PhysicsHandle,
+    ) -> Result<Vec<PhantomOverlap>, PhysicsError> {
         Ok(Vec::new())
     }
-    fn create_dynamic_body(&mut self, _desc: &DynamicBodyDesc) -> Result<PhysicsHandle, PhysicsError> {
+    fn create_dynamic_body(
+        &mut self,
+        _desc: &DynamicBodyDesc,
+    ) -> Result<PhysicsHandle, PhysicsError> {
         Ok(PhysicsHandle::new(3))
     }
     fn remove_dynamic_body(&mut self, _handle: PhysicsHandle) -> Result<(), PhysicsError> {
         Ok(())
     }
-    fn apply_impulse(&mut self, _handle: PhysicsHandle, _impulse: &Vec3) -> Result<(), PhysicsError> {
+    fn apply_impulse(
+        &mut self,
+        _handle: PhysicsHandle,
+        _impulse: &Vec3,
+    ) -> Result<(), PhysicsError> {
         Ok(())
     }
-    fn apply_impulse_at_point(&mut self, _handle: PhysicsHandle, _impulse: &Vec3, _point: &Vec3) -> Result<(), PhysicsError> {
+    fn apply_impulse_at_point(
+        &mut self,
+        _handle: PhysicsHandle,
+        _impulse: &Vec3,
+        _point: &Vec3,
+    ) -> Result<(), PhysicsError> {
         Ok(())
     }
     fn create_character(&mut self, _desc: &CharacterDesc) -> Result<PhysicsHandle, PhysicsError> {
@@ -54,7 +83,11 @@ impl PhysicsWorld for StubPhysics {
     fn remove_character(&mut self, _handle: PhysicsHandle) -> Result<(), PhysicsError> {
         Ok(())
     }
-    fn move_character(&mut self, _handle: PhysicsHandle, _displacement: &Vec3) -> Result<CharacterMoveResult, PhysicsError> {
+    fn move_character(
+        &mut self,
+        _handle: PhysicsHandle,
+        _displacement: &Vec3,
+    ) -> Result<CharacterMoveResult, PhysicsError> {
         Ok(CharacterMoveResult {
             applied_displacement: Vec3::ZERO,
             is_grounded: true,
@@ -181,7 +214,10 @@ fn test_c_abi_null_pointer_safety() {
             floride_session_tick(std::ptr::null_mut()),
             FLORIDE_ERR_NULL_PTR
         );
-        assert_eq!(floride_session_snapshot_ptr(std::ptr::null()), std::ptr::null());
+        assert_eq!(
+            floride_session_snapshot_ptr(std::ptr::null()),
+            std::ptr::null()
+        );
         assert_eq!(floride_session_snapshot_len(std::ptr::null()), 0);
 
         // Destroying null must not panic
@@ -209,12 +245,8 @@ fn test_c_abi_full_lifecycle_and_zero_copy_read() {
         let mut look_data = Vec::new();
         look_data.extend_from_slice(&3.14159f32.to_le_bytes()); // yaw
         look_data.extend_from_slice(&0.785f32.to_le_bytes()); // pitch
-        let status = floride_session_dispatch_action(
-            handle,
-            0x0001,
-            look_data.as_ptr(),
-            look_data.len(),
-        );
+        let status =
+            floride_session_dispatch_action(handle, 0x0001, look_data.as_ptr(), look_data.len());
         assert_eq!(status, FLORIDE_OK);
 
         // Advance simulation tick via C FFI
@@ -261,6 +293,107 @@ fn test_c_abi_error_on_invalid_action() {
         );
         assert_eq!(bad_len_status, FLORIDE_ERR_ACTION_FAILED);
 
+        // Last error string should describe the failure clearly.
+        let err_len = floride_last_error_len();
+        assert!(err_len > 0);
+        let err_ptr = floride_last_error_ptr();
+        assert!(!err_ptr.is_null());
+        let mut err_buf = vec![0u8; err_len];
+        let mut copied = 0usize;
+        assert_eq!(
+            floride_copy_last_error(err_buf.as_mut_ptr(), err_buf.len(), &mut copied),
+            FLORIDE_OK
+        );
+        assert_eq!(copied, err_len);
+        let err_msg = std::str::from_utf8(&err_buf).unwrap();
+        assert!(err_msg.contains("expected 8 bytes"));
+
+        floride_session_destroy(handle);
+    }
+}
+
+#[test]
+fn test_c_abi_versions_alloc_and_copy_snapshot() {
+    assert_eq!(floride_abi_version(), FLORIDE_ABI_VERSION);
+    assert_eq!(floride_protocol_version(), PROTOCOL_VERSION);
+
+    unsafe {
+        // Test guest allocator round-trip
+        let guest_ptr = floride_alloc(16);
+        assert!(!guest_ptr.is_null());
+        std::ptr::write_bytes(guest_ptr, 0x5A, 16);
+        assert_eq!(*guest_ptr.add(15), 0x5A);
+        floride_dealloc(guest_ptr, 16);
+        assert_eq!(floride_alloc(0), std::ptr::null_mut());
+        floride_dealloc(std::ptr::null_mut(), 0);
+
+        let handle = create_raw_test_session();
+        let needed = floride_session_snapshot_len(handle);
+        assert!(needed >= 16);
+
+        // Buffer too small must return INVALID_ARGUMENT and report required size
+        let mut small = [0u8; 4];
+        let mut written = 0usize;
+        assert_eq!(
+            floride_session_copy_snapshot(handle, small.as_mut_ptr(), small.len(), &mut written),
+            FLORIDE_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(written, needed);
+
+        // Exact buffer succeeds and matches zero-copy view
+        let mut full = vec![0u8; needed];
+        assert_eq!(
+            floride_session_copy_snapshot(handle, full.as_mut_ptr(), full.len(), &mut written),
+            FLORIDE_OK
+        );
+        assert_eq!(written, needed);
+        let zero_copy = std::slice::from_raw_parts(floride_session_snapshot_ptr(handle), needed);
+        assert_eq!(full.as_slice(), zero_copy);
+
+        floride_session_destroy(handle);
+    }
+}
+
+struct PanickingSession;
+impl AnySession for PanickingSession {
+    fn dispatch_action(&mut self, _action_id: u16, _payload: &[u8]) -> Result<(), HostError> {
+        panic!("simulated dispatch panic");
+    }
+    fn tick(&mut self) -> Result<(), HostError> {
+        panic!("simulated tick panic");
+    }
+    fn snapshot_slice(&self) -> &[u8] {
+        &[]
+    }
+    fn snapshot_ptr(&self) -> *const u8 {
+        std::ptr::null()
+    }
+    fn snapshot_len(&self) -> usize {
+        0
+    }
+}
+
+#[test]
+fn test_c_abi_catches_panics_across_boundary() {
+    unsafe {
+        let handle = Box::into_raw(Box::new(FlorideSessionHandle::new(PanickingSession)));
+
+        assert_eq!(
+            floride_session_dispatch_action(handle, 1, std::ptr::null(), 0),
+            FLORIDE_ERR_PANIC
+        );
+        let len = floride_last_error_len();
+        let mut buf = vec![0u8; len];
+        let mut written = 0usize;
+        assert_eq!(
+            floride_copy_last_error(buf.as_mut_ptr(), buf.len(), &mut written),
+            FLORIDE_OK
+        );
+        assert!(std::str::from_utf8(&buf)
+            .unwrap()
+            .contains("simulated dispatch panic"));
+
+        assert_eq!(floride_session_tick(handle), FLORIDE_ERR_PANIC);
         floride_session_destroy(handle);
     }
 }

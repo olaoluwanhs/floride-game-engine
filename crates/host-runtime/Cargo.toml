@@ -12,4 +12,4 @@ game-types = { path = "../game-types" }
 physics-api = { path = "../physics-api" }
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["staticlib", "cdylib", "rlib"]

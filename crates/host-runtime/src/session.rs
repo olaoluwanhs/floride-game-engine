@@ -20,6 +20,17 @@ impl From<ActionError> for HostError {
     }
 }
 
+impl std::fmt::Display for HostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Action(err) => write!(f, "action error: {err}"),
+            Self::Game(msg) => write!(f, "game error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for HostError {}
+
 /// Trait implemented by game adapters or serializers to serialize game snapshots
 /// and transient events into TLV snapshot chunks.
 pub trait SnapshotEncoder<Snapshot, Event> {

@@ -1,0 +1,14 @@
+[package]
+name = "floride-host-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Generic wasm-bindgen session wrapper connecting Floride games to React Web / Web Workers"
+
+[dependencies]
+floride-host-runtime = { path = "../host-runtime" }
+game-api = { path = "../game-api" }
+wasm-bindgen = "0.2"
+
+[dev-dependencies]
+game-types = { path = "../game-types" }
+physics-api = { path = "../physics-api" }

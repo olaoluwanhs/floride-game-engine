@@ -15,15 +15,31 @@ pub enum ActionError {
     /// The input buffer was smaller than the 4-byte action header.
     BufferTooShort,
     /// The declared payload length exceeded the actual available bytes.
-    PayloadLengthMismatch {
-        declared: usize,
-        available: usize,
-    },
+    PayloadLengthMismatch { declared: usize, available: usize },
     /// The game or decoder does not recognize the specified action ID.
     UnknownActionId(u16),
     /// The payload bytes could not be decoded into the expected parameter types.
     InvalidPayload(String),
 }
+
+impl std::fmt::Display for ActionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BufferTooShort => write!(f, "action buffer shorter than 4-byte header"),
+            Self::PayloadLengthMismatch {
+                declared,
+                available,
+            } => write!(
+                f,
+                "action payload declared {declared} bytes, but only {available} available"
+            ),
+            Self::UnknownActionId(id) => write!(f, "unknown action id 0x{id:04X}"),
+            Self::InvalidPayload(msg) => write!(f, "invalid action payload: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for ActionError {}
 
 /// A zero-copy view over an action packet received from the host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,8 +62,8 @@ impl<'a> ActionPacket<'a> {
             return Err(ActionError::BufferTooShort);
         }
 
-        let action_id = u16::from_le_bytes(bytes[0..2].try_into().unwrap());
-        let payload_len = u16::from_le_bytes(bytes[2..4].try_into().unwrap()) as usize;
+        let action_id = u16::from_le_bytes([bytes[0], bytes[1]]);
+        let payload_len = u16::from_le_bytes([bytes[2], bytes[3]]) as usize;
 
         if bytes.len() < 4 + payload_len {
             return Err(ActionError::PayloadLengthMismatch {

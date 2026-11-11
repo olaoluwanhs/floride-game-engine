@@ -8,7 +8,7 @@
 use game_types::{EntityId, Vec3};
 use physics_api::{
     DynamicBodyDesc, HeightFieldDesc, PhantomBehavior, PhantomColliderDesc, PhysicsError,
-    PhysicsHandle, PhysicsTransform, PhysicsWorld, PrimitiveShape, StaticColliderDesc,
+    PhysicsHandle, PhysicsTransform, PhysicsWorld, PrimitiveShape, Quaternion, StaticColliderDesc,
 };
 use serde::{Deserialize, Serialize};
 
@@ -207,6 +207,438 @@ impl LevelWorldSpec {
 
         highest
     }
+
+    /// Samples minimum, maximum, center elevation, and upward slope normal across an XZ footprint.
+    pub fn sample_footprint_stats(
+        &self,
+        center_x: f32,
+        center_z: f32,
+        half_x: f32,
+        half_z: f32,
+    ) -> Option<TerrainFootprintStats> {
+        let hx = half_x.abs().max(0.05);
+        let hz = half_z.abs().max(0.05);
+        let steps_x = ((hx * 2.0 / 0.5).ceil() as usize).clamp(2, 8);
+        let steps_z = ((hz * 2.0 / 0.5).ceil() as usize).clamp(2, 8);
+
+        let mut min_y = f32::INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+        let mut found = false;
+
+        for iz in 0..=steps_z {
+            let fz = (iz as f32 / steps_z as f32) * 2.0 - 1.0;
+            let sz = center_z + fz * hz;
+            for ix in 0..=steps_x {
+                let fx = (ix as f32 / steps_x as f32) * 2.0 - 1.0;
+                let sx = center_x + fx * hx;
+                if let Some(y) = self.surface_height_at(sx, sz) {
+                    min_y = min_y.min(y);
+                    max_y = max_y.max(y);
+                    found = true;
+                }
+            }
+        }
+
+        if !found {
+            return None;
+        }
+
+        let center_y = self
+            .surface_height_at(center_x, center_z)
+            .unwrap_or((min_y + max_y) * 0.5);
+
+        let eps = hx.min(hz).clamp(0.25, 1.5);
+        let dx = match (
+            self.surface_height_at(center_x - eps, center_z),
+            self.surface_height_at(center_x + eps, center_z),
+        ) {
+            (Some(hl), Some(hr)) => (hr - hl) / (2.0 * eps),
+            (None, Some(hr)) => (hr - center_y) / eps,
+            (Some(hl), None) => (center_y - hl) / eps,
+            (None, None) => 0.0,
+        };
+        let dz = match (
+            self.surface_height_at(center_x, center_z - eps),
+            self.surface_height_at(center_x, center_z + eps),
+        ) {
+            (Some(hd), Some(hu)) => (hu - hd) / (2.0 * eps),
+            (None, Some(hu)) => (hu - center_y) / eps,
+            (Some(hd), None) => (center_y - hd) / eps,
+            (None, None) => 0.0,
+        };
+
+        let normal = Vec3::new(-dx, 1.0, -dz).normalized_or(Vec3::UP);
+
+        Some(TerrainFootprintStats {
+            min_y,
+            max_y,
+            center_y,
+            normal,
+        })
+    }
+
+    /// Computes a non-clipping, slope-aligned [`PhysicsTransform`] for a dynamic body
+    /// (`Box`, `Sphere`, `Cylinder`, or `Capsule`) centered horizontally at `(center_x, center_z)`.
+    pub fn seat_dynamic_transform(
+        &self,
+        shape: &PrimitiveShape,
+        center_x: f32,
+        center_z: f32,
+    ) -> PhysicsTransform {
+        self.seat_dynamic_transform_with_yaw(shape, center_x, center_z, 0.0)
+    }
+
+    /// Computes a non-clipping, slope-aligned [`PhysicsTransform`] for a dynamic body
+    /// while preserving an authored horizontal facing rotation (`yaw_radians` around `+Y`).
+    pub fn seat_dynamic_transform_with_yaw(
+        &self,
+        shape: &PrimitiveShape,
+        center_x: f32,
+        center_z: f32,
+        yaw_radians: f32,
+    ) -> PhysicsTransform {
+        let clearance = 0.015;
+        let yaw_q = Quaternion::from_euler_yxz(yaw_radians, 0.0, 0.0);
+        let (hx, hz) = shape_rotated_footprint_extents(shape, &yaw_q);
+        let stats = self
+            .sample_footprint_stats(center_x, center_z, hx, hz)
+            .unwrap_or_default();
+
+        if let PrimitiveShape::Sphere { radius } = shape {
+            let mut tf = PhysicsTransform::new(Vec3::new(center_x, 0.0, center_z), yaw_q);
+            tf.position.y = self.sphere_clear_center_y(center_x, center_z, *radius, &stats, clearance);
+            return tf;
+        }
+
+        let local_normal = yaw_q.inverse_rotate_vec(&stats.normal).normalized_or(Vec3::UP);
+        let pitch = local_normal.z.atan2(local_normal.y);
+        let cos_roll = (local_normal.y * local_normal.y + local_normal.z * local_normal.z)
+            .sqrt();
+        let roll = (-local_normal.x).atan2(cos_roll);
+        let rotation = Quaternion::from_euler_yxz(yaw_radians, pitch, roll);
+        let sample_points = shape_bottom_sample_points(shape);
+        let mut req_center_y = stats.center_y + clearance;
+        for local_pt in sample_points {
+            let world_offset = rotation.rotate_vec(&local_pt);
+            let ground_y = self
+                .surface_height_at(center_x + world_offset.x, center_z + world_offset.z)
+                .unwrap_or(stats.center_y);
+            req_center_y = req_center_y.max(ground_y - world_offset.y + clearance);
+        }
+
+        PhysicsTransform::new(Vec3::new(center_x, req_center_y, center_z), rotation)
+    }
+
+    /// Preserves `transform.rotation` (all 3 Euler axes) and adjusts `transform.position.y`
+    /// so every point on the rotated `shape` hull sits at least `clearance` meters above the floor.
+    pub fn seat_transform_to_floor_preserving_rotation(
+        &self,
+        shape: &PrimitiveShape,
+        transform: &mut PhysicsTransform,
+        clearance: f32,
+    ) {
+        let (hx, hz) = shape_rotated_footprint_extents(shape, &transform.rotation);
+        let stats = self
+            .sample_footprint_stats(transform.position.x, transform.position.z, hx, hz)
+            .unwrap_or_default();
+
+        if let PrimitiveShape::Sphere { radius } = shape {
+            transform.position.y = self.sphere_clear_center_y(
+                transform.position.x,
+                transform.position.z,
+                *radius,
+                &stats,
+                clearance,
+            );
+            return;
+        }
+
+        let sample_points = shape_hull_sample_points(shape);
+        let mut req_center_y = f32::NEG_INFINITY;
+        for local_pt in sample_points {
+            let world_offset = transform.rotation.rotate_vec(&local_pt);
+            let ground_y = self
+                .surface_height_at(
+                    transform.position.x + world_offset.x,
+                    transform.position.z + world_offset.z,
+                )
+                .unwrap_or(stats.center_y);
+            req_center_y = req_center_y.max(ground_y - world_offset.y + clearance);
+        }
+        if req_center_y.is_finite() {
+            transform.position.y = req_center_y;
+        }
+    }
+
+    fn sphere_clear_center_y(
+        &self,
+        center_x: f32,
+        center_z: f32,
+        radius: f32,
+        stats: &TerrainFootprintStats,
+        clearance: f32,
+    ) -> f32 {
+        let r = radius.abs().max(0.05);
+        let steps = 4usize;
+        let mut req_center_y = stats.center_y + r / stats.normal.y.max(0.25) + clearance;
+        for iz in 0..=steps {
+            let dz = ((iz as f32 / steps as f32) * 2.0 - 1.0) * r;
+            for ix in 0..=steps {
+                let dx = ((ix as f32 / steps as f32) * 2.0 - 1.0) * r;
+                let r_sq = dx * dx + dz * dz;
+                if r_sq > r * r {
+                    continue;
+                }
+                if let Some(gy) = self.surface_height_at(center_x + dx, center_z + dz) {
+                    let sphere_bottom_drop = (r * r - r_sq).sqrt();
+                    req_center_y = req_center_y.max(gy + sphere_bottom_drop + clearance);
+                }
+            }
+        }
+        req_center_y
+    }
+
+    /// Seats an immovable static prop on terrain:
+    /// - When upright (only Yaw rotation), keeps its Yaw while extending its foundation bottom down
+    ///   to `stats.min_y` and placing its top at `stats.max_y + desired_height`.
+    /// - When tilted (non-zero Pitch or Roll, e.g., an angled ramp), preserves full 3D rotation and
+    ///   authored `desired_height` while seating its lowest rotated point cleanly on the floor.
+    ///
+    /// Floor shapes (`Plane`, `HeightField`) are left untouched.
+    pub fn seat_static_upright(&self, obj: &mut LevelStaticObject, desired_height: f32) {
+        if matches!(
+            obj.shape,
+            PrimitiveShape::Plane { .. } | PrimitiveShape::HeightField(..)
+        ) {
+            return;
+        }
+        self.seat_upright_shape_to_floor(
+            &mut obj.shape,
+            &mut obj.transform,
+            desired_height.max(0.4),
+            0.2,
+            0.25,
+        );
+    }
+
+    /// Seats a non-blocking trigger volume across `[min_y .. max_y + desired_height]`
+    /// beneath its rotated XZ footprint, preserving Yaw (or full 3D rotation if tilted).
+    pub fn seat_trigger_to_floor(&self, trig: &mut LevelTriggerVolume, desired_height: f32) {
+        self.seat_upright_shape_to_floor(
+            &mut trig.shape,
+            &mut trig.transform,
+            desired_height.max(0.5),
+            0.25,
+            0.25,
+        );
+    }
+
+    fn seat_upright_shape_to_floor(
+        &self,
+        shape: &mut PrimitiveShape,
+        transform: &mut PhysicsTransform,
+        desired_height: f32,
+        min_box_half_y: f32,
+        min_cyl_half_y: f32,
+    ) {
+        let (yaw, pitch, roll) = transform.rotation.to_euler_yxz();
+        let is_upright = pitch.abs() < 1.0e-3 && roll.abs() < 1.0e-3;
+
+        if !is_upright {
+            match shape {
+                PrimitiveShape::Box { half_extents } => {
+                    half_extents.y = (desired_height * 0.5).max(min_box_half_y);
+                }
+                PrimitiveShape::Cylinder { half_height, .. } => {
+                    *half_height = (desired_height * 0.5).max(min_cyl_half_y);
+                }
+                _ => {}
+            }
+            self.seat_transform_to_floor_preserving_rotation(shape, transform, 0.0);
+            return;
+        }
+
+        let yaw_q = Quaternion::from_euler_yxz(yaw, 0.0, 0.0);
+        let (hx, hz) = shape_rotated_footprint_extents(shape, &yaw_q);
+        let stats = self
+            .sample_footprint_stats(transform.position.x, transform.position.z, hx, hz)
+            .unwrap_or_default();
+        let bottom = stats.min_y;
+        let top = stats.max_y + desired_height;
+        match shape {
+            PrimitiveShape::Box { half_extents } => {
+                half_extents.y = ((top - bottom) * 0.5).max(min_box_half_y);
+                transform.position.y = (top + bottom) * 0.5;
+                transform.rotation = yaw_q;
+            }
+            PrimitiveShape::Cylinder { half_height, .. } => {
+                *half_height = ((top - bottom) * 0.5).max(min_cyl_half_y);
+                transform.position.y = (top + bottom) * 0.5;
+                transform.rotation = yaw_q;
+            }
+            PrimitiveShape::Sphere { radius } => {
+                transform.position.y = stats.max_y + radius.abs();
+                transform.rotation = yaw_q;
+            }
+            PrimitiveShape::Capsule {
+                radius,
+                half_height,
+            } => {
+                transform.position.y = stats.max_y + half_height.abs() + radius.abs();
+                transform.rotation = yaw_q;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Ground elevation summary across an XZ footprint, returned by [`LevelWorldSpec::sample_footprint_stats`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TerrainFootprintStats {
+    /// Lowest ground point beneath the footprint.
+    pub min_y: f32,
+    /// Highest ground point beneath the footprint.
+    pub max_y: f32,
+    /// Ground point at the horizontal center of the footprint.
+    pub center_y: f32,
+    /// Average unit upward surface normal of the ground under the footprint.
+    pub normal: Vec3,
+}
+
+impl Default for TerrainFootprintStats {
+    fn default() -> Self {
+        Self {
+            min_y: 0.0,
+            max_y: 0.0,
+            center_y: 0.0,
+            normal: Vec3::UP,
+        }
+    }
+}
+
+/// Computes axis-aligned `(half_x, half_z)` footprint extents of `shape` after applying `rotation`.
+pub fn shape_rotated_footprint_extents(
+    shape: &PrimitiveShape,
+    rotation: &Quaternion,
+) -> (f32, f32) {
+    match shape {
+        PrimitiveShape::Box { half_extents } => {
+            let ax = rotation.rotate_vec(&Vec3::new(half_extents.x.abs(), 0.0, 0.0));
+            let ay = rotation.rotate_vec(&Vec3::new(0.0, half_extents.y.abs(), 0.0));
+            let az = rotation.rotate_vec(&Vec3::new(0.0, 0.0, half_extents.z.abs()));
+            (
+                ax.x.abs() + ay.x.abs() + az.x.abs(),
+                ax.z.abs() + ay.z.abs() + az.z.abs(),
+            )
+        }
+        PrimitiveShape::Cylinder {
+            radius,
+            half_height,
+        } => {
+            let r = radius.abs();
+            let hh = half_height.abs();
+            let axis = rotation.rotate_vec(&Vec3::UP);
+            (
+                hh * axis.x.abs() + r * (1.0 - axis.x * axis.x).max(0.0).sqrt(),
+                hh * axis.z.abs() + r * (1.0 - axis.z * axis.z).max(0.0).sqrt(),
+            )
+        }
+        PrimitiveShape::Capsule {
+            radius,
+            half_height,
+        } => {
+            let r = radius.abs();
+            let hh = half_height.abs();
+            let axis = rotation.rotate_vec(&Vec3::UP);
+            (hh * axis.x.abs() + r, hh * axis.z.abs() + r)
+        }
+        PrimitiveShape::Sphere { radius } => (radius.abs(), radius.abs()),
+        PrimitiveShape::Torus {
+            major_radius,
+            tube_radius,
+        } => {
+            let ring_r = major_radius.abs() + tube_radius.abs();
+            let tube_r = tube_radius.abs();
+            let axis = rotation.rotate_vec(&Vec3::UP);
+            (
+                tube_r * axis.x.abs() + ring_r * (1.0 - axis.x * axis.x).max(0.0).sqrt(),
+                tube_r * axis.z.abs() + ring_r * (1.0 - axis.z * axis.z).max(0.0).sqrt(),
+            )
+        }
+        _ => (0.5, 0.5),
+    }
+}
+
+fn shape_bottom_sample_points(shape: &PrimitiveShape) -> Vec<Vec3> {
+    let mut points = Vec::new();
+    match shape {
+        PrimitiveShape::Box { half_extents } => {
+            let hx = half_extents.x.abs();
+            let hy = -half_extents.y.abs();
+            let hz = half_extents.z.abs();
+            for iz in [-1.0_f32, 0.0, 1.0] {
+                for ix in [-1.0_f32, 0.0, 1.0] {
+                    points.push(Vec3::new(ix * hx, hy, iz * hz));
+                }
+            }
+        }
+        PrimitiveShape::Cylinder {
+            radius,
+            half_height,
+        } => {
+            let r = radius.abs();
+            let hy = -half_height.abs();
+            points.push(Vec3::new(0.0, hy, 0.0));
+            for s in 0..8 {
+                let angle = std::f32::consts::TAU * s as f32 / 8.0;
+                points.push(Vec3::new(r * angle.cos(), hy, r * angle.sin()));
+            }
+        }
+        PrimitiveShape::Capsule {
+            radius,
+            half_height,
+        } => {
+            points.push(Vec3::new(0.0, -(half_height.abs() + radius.abs()), 0.0));
+        }
+        _ => points.push(Vec3::ZERO),
+    }
+    points
+}
+
+fn shape_hull_sample_points(shape: &PrimitiveShape) -> Vec<Vec3> {
+    let mut points = shape_bottom_sample_points(shape);
+    match shape {
+        PrimitiveShape::Box { half_extents } => {
+            let hx = half_extents.x.abs();
+            let hy = half_extents.y.abs();
+            let hz = half_extents.z.abs();
+            for iz in [-1.0_f32, 0.0, 1.0] {
+                for ix in [-1.0_f32, 0.0, 1.0] {
+                    points.push(Vec3::new(ix * hx, hy, iz * hz));
+                }
+            }
+        }
+        PrimitiveShape::Cylinder {
+            radius,
+            half_height,
+        } => {
+            let r = radius.abs();
+            let hy = half_height.abs();
+            points.push(Vec3::new(0.0, hy, 0.0));
+            for s in 0..8 {
+                let angle = std::f32::consts::TAU * s as f32 / 8.0;
+                points.push(Vec3::new(r * angle.cos(), hy, r * angle.sin()));
+            }
+        }
+        PrimitiveShape::Capsule {
+            radius,
+            half_height,
+        } => {
+            points.push(Vec3::new(0.0, half_height.abs() + radius.abs(), 0.0));
+        }
+        _ => {}
+    }
+    points
 }
 
 /// Procedural terrain shapes for generating uneven heightmap floors.
@@ -525,8 +957,8 @@ mod tests {
     use physics_api::{
         CharacterDesc, CharacterMoveResult, DynamicBodyDesc, HeightFieldDesc, PhantomBehavior,
         PhantomColliderDesc, PhantomOverlap, PhantomRayHit, PhysicsError, PhysicsHandle,
-        PhysicsTransform, PhysicsWorld, PlaneHalfExtents, PrimitiveShape, RayHit, RayQuery,
-        StaticColliderDesc,
+        PhysicsTransform, PhysicsWorld, PlaneHalfExtents, PrimitiveShape, Quaternion, RayHit,
+        RayQuery, StaticColliderDesc,
     };
 
     #[derive(Default)]
@@ -755,5 +1187,233 @@ mod tests {
         // u=0.75, v=0.75 -> u+v > 1 -> 10 + 0.25*(4-10) + 0.25*(2-10) = 6.5
         let h_upper = world_spec.surface_height_at(1.5, 1.5).unwrap();
         assert!((h_upper - 6.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn footprint_stats_and_dynamic_slope_seating_prevent_clipping_and_floating() {
+        // Sloped terrain rising linearly along +X: slope dy/dx = 0.5
+        let rows = 5usize;
+        let columns = 5usize;
+        let mut samples = Vec::with_capacity(rows * columns);
+        for _r in 0..rows {
+            for c in 0..columns {
+                samples.push(c as f32 * 1.0); // step 2m -> slope = 0.5
+            }
+        }
+        let world = LevelWorldSpec {
+            static_objects: vec![LevelStaticObject {
+                id: None,
+                name: "ramp".to_owned(),
+                shape: PrimitiveShape::HeightField(HeightFieldDesc {
+                    rows,
+                    columns,
+                    height_samples: samples,
+                    cell_size_x: 2.0,
+                    cell_size_z: 2.0,
+                    thickness: Some(1.0),
+                }),
+                transform: PhysicsTransform::IDENTITY,
+                color: LevelColor::default(),
+            }],
+            ..LevelWorldSpec::default()
+        };
+
+        let stats = world
+            .sample_footprint_stats(4.0, 4.0, 1.0, 1.0)
+            .expect("stats inside ramp");
+        assert!((stats.min_y - 1.5).abs() < 1e-4);
+        assert!((stats.max_y - 2.5).abs() < 1e-4);
+        assert!(stats.normal.x < -0.3 && stats.normal.y > 0.8);
+
+        let crate_shape = PrimitiveShape::Box {
+            half_extents: Vec3::new(0.6, 0.6, 0.6),
+        };
+        let seated = world.seat_dynamic_transform(&crate_shape, 4.0, 4.0);
+        // Bottom corners of the rotated crate must all lie cleanly at or slightly above the slope.
+        for sx in [-0.6_f32, 0.6] {
+            for sz in [-0.6_f32, 0.6] {
+                let offset = seated.rotation.rotate_vec(&Vec3::new(sx, -0.6, sz));
+                let world_corner = seated.position.add(&offset);
+                let ground = world
+                    .surface_height_at(world_corner.x, world_corner.z)
+                    .unwrap();
+                assert!(world_corner.y >= ground);
+                assert!(world_corner.y - ground < 0.05);
+            }
+        }
+    }
+
+    #[test]
+    fn static_upright_and_trigger_seating_span_slope_footprint_without_floating() {
+        // Sloped terrain rising linearly along +X: slope dy/dx = 0.5 (height = x * 0.5).
+        let rows = 5usize;
+        let columns = 5usize;
+        let mut samples = Vec::with_capacity(rows * columns);
+        for _r in 0..rows {
+            for c in 0..columns {
+                samples.push(c as f32 * 1.0);
+            }
+        }
+        let world = LevelWorldSpec {
+            static_objects: vec![LevelStaticObject {
+                id: None,
+                name: "ramp".to_owned(),
+                shape: PrimitiveShape::HeightField(HeightFieldDesc {
+                    rows,
+                    columns,
+                    height_samples: samples,
+                    cell_size_x: 2.0,
+                    cell_size_z: 2.0,
+                    thickness: Some(1.0),
+                }),
+                transform: PhysicsTransform::IDENTITY,
+                color: LevelColor::default(),
+            }],
+            ..LevelWorldSpec::default()
+        };
+
+        // Calling seat_static_upright on the floor itself must leave it untouched.
+        let mut floor_copy = world.static_objects[0].clone();
+        world.seat_static_upright(&mut floor_copy, 2.0);
+        assert_eq!(floor_copy, world.static_objects[0]);
+
+        // Static wall spanning X in [3.0, 5.0]: min_y = 1.5, max_y = 2.5, desired_h = 2.0 -> [1.5 .. 4.5]
+        let mut cover = LevelStaticObject {
+            id: Some(EntityId::new(10)),
+            name: "wall".to_owned(),
+            shape: PrimitiveShape::Box {
+                half_extents: Vec3::new(1.0, 1.0, 1.0),
+            },
+            transform: PhysicsTransform::from_position(Vec3::new(4.0, 0.0, 4.0)),
+            color: LevelColor::default(),
+        };
+        world.seat_static_upright(&mut cover, 2.0);
+        assert_eq!(cover.transform.rotation, Quaternion::IDENTITY);
+        let PrimitiveShape::Box { half_extents } = cover.shape else {
+            panic!("expected box");
+        };
+        assert!(((cover.transform.position.y - half_extents.y) - 1.5).abs() < 1e-4);
+        assert!(((cover.transform.position.y + half_extents.y) - 4.5).abs() < 1e-4);
+
+        // Trigger cylinder spanning X in [3.0, 5.0]: [min_y .. max_y + 3.0] -> [1.5 .. 5.5]
+        let mut trig = LevelTriggerVolume {
+            id: EntityId::new(20),
+            name: "zone".to_owned(),
+            tag: "checkpoint".to_owned(),
+            shape: PrimitiveShape::Cylinder {
+                half_height: 1.5,
+                radius: 1.0,
+            },
+            transform: PhysicsTransform::from_position(Vec3::new(4.0, 0.0, 4.0)),
+            behavior: PhantomBehavior::OverlapSensor,
+            color: LevelColor::default(),
+        };
+        world.seat_trigger_to_floor(&mut trig, 3.0);
+        assert_eq!(trig.transform.rotation, Quaternion::IDENTITY);
+        let PrimitiveShape::Cylinder { half_height, .. } = trig.shape else {
+            panic!("expected cylinder");
+        };
+        assert!(((trig.transform.position.y - half_height) - 1.5).abs() < 1e-4);
+        assert!(((trig.transform.position.y + half_height) - 5.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn rotated_static_walls_ramps_and_yawed_dynamic_bodies_preserve_rotation_on_slopes() {
+        let rows = 5usize;
+        let columns = 5usize;
+        let mut samples = Vec::with_capacity(rows * columns);
+        for _r in 0..rows {
+            for c in 0..columns {
+                samples.push(c as f32 * 1.0); // height = 0.5 * x
+            }
+        }
+        let world = LevelWorldSpec {
+            static_objects: vec![LevelStaticObject {
+                id: None,
+                name: "ramp".to_owned(),
+                shape: PrimitiveShape::HeightField(HeightFieldDesc {
+                    rows,
+                    columns,
+                    height_samples: samples,
+                    cell_size_x: 2.0,
+                    cell_size_z: 2.0,
+                    thickness: Some(1.0),
+                }),
+                transform: PhysicsTransform::IDENTITY,
+                color: LevelColor::default(),
+            }],
+            ..LevelWorldSpec::default()
+        };
+
+        // Thin wall (half_x=0.5, half_z=2.0) rotated 90 deg yaw -> world X span is +-2.0 around x=4.0:
+        // X in [2.0, 6.0] -> min_y = 1.0, max_y = 3.0, desired_h = 2.0 -> [1.0 .. 5.0]
+        let yaw_90 = Quaternion::from_euler_yxz(std::f32::consts::FRAC_PI_2, 0.0, 0.0);
+        let mut rotated_wall = LevelStaticObject {
+            id: Some(EntityId::new(11)),
+            name: "rotated_wall".to_owned(),
+            shape: PrimitiveShape::Box {
+                half_extents: Vec3::new(0.5, 1.0, 2.0),
+            },
+            transform: PhysicsTransform::new(Vec3::new(4.0, 0.0, 4.0), yaw_90),
+            color: LevelColor::default(),
+        };
+        world.seat_static_upright(&mut rotated_wall, 2.0);
+        let (ry, rp, rr) = rotated_wall.transform.rotation.to_euler_yxz();
+        assert!((ry - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+        assert!(rp.abs() < 1e-4 && rr.abs() < 1e-4);
+        let PrimitiveShape::Box { half_extents } = rotated_wall.shape else {
+            panic!("expected box");
+        };
+        assert!(((rotated_wall.transform.position.y - half_extents.y) - 1.0).abs() < 1e-4);
+        assert!(((rotated_wall.transform.position.y + half_extents.y) - 5.0).abs() < 1e-4);
+
+        // Intentionally pitched ramp (pitch = 20 deg) must preserve pitch & clear ground.
+        let pitch_20 = Quaternion::from_euler_yxz(0.0, 20.0_f32.to_radians(), 0.0);
+        let mut pitched_ramp = LevelStaticObject {
+            id: Some(EntityId::new(12)),
+            name: "angled_ramp".to_owned(),
+            shape: PrimitiveShape::Box {
+                half_extents: Vec3::new(1.0, 0.5, 2.0),
+            },
+            transform: PhysicsTransform::new(Vec3::new(4.0, 0.0, 4.0), pitch_20),
+            color: LevelColor::default(),
+        };
+        world.seat_static_upright(&mut pitched_ramp, 1.0);
+        let (_, rp2, _) = pitched_ramp.transform.rotation.to_euler_yxz();
+        assert!((rp2 - 20.0_f32.to_radians()).abs() < 1e-4);
+        let mut lowest_gap = f32::INFINITY;
+        for sx in [-1.0_f32, 1.0] {
+            for sy in [-0.5_f32, 0.5] {
+                for sz in [-2.0_f32, 2.0] {
+                    let off = pitched_ramp
+                        .transform
+                        .rotation
+                        .rotate_vec(&Vec3::new(sx, sy, sz));
+                    let wp = pitched_ramp.transform.position.add(&off);
+                    let gy = world.surface_height_at(wp.x, wp.z).unwrap();
+                    assert!(wp.y >= gy - 1e-4);
+                    lowest_gap = lowest_gap.min(wp.y - gy);
+                }
+            }
+        }
+        assert!(lowest_gap < 0.05);
+
+        // Dynamic crate with 45 deg yaw keeps its yaw while conforming to slope.
+        let crate_shape = PrimitiveShape::Box {
+            half_extents: Vec3::new(0.6, 0.6, 0.6),
+        };
+        let yaw_45 = 45.0_f32.to_radians();
+        let dyn_tf = world.seat_dynamic_transform_with_yaw(&crate_shape, 4.0, 4.0, yaw_45);
+        let (dy, _, _) = dyn_tf.rotation.to_euler_yxz();
+        assert!((dy - yaw_45).abs() < 0.05);
+        for sx in [-0.6_f32, 0.6] {
+            for sz in [-0.6_f32, 0.6] {
+                let off = dyn_tf.rotation.rotate_vec(&Vec3::new(sx, -0.6, sz));
+                let wp = dyn_tf.position.add(&off);
+                let gy = world.surface_height_at(wp.x, wp.z).unwrap();
+                assert!(wp.y >= gy);
+                assert!(wp.y - gy < 0.05);
+            }
+        }
     }
 }

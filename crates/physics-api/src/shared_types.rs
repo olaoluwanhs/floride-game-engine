@@ -73,6 +73,62 @@ impl Quaternion {
         self.conjugate().rotate_vec(vector)
     }
 
+    /// Multiplies two quaternions (`self * other`), composing `other` followed by `self`.
+    pub fn mul(&self, other: &Self) -> Self {
+        Self::new(
+            self.w * other.x + self.x * other.w + self.y * other.z - self.z * other.y,
+            self.w * other.y - self.x * other.z + self.y * other.w + self.z * other.x,
+            self.w * other.z + self.x * other.y - self.y * other.x + self.z * other.w,
+            self.w * other.w - self.x * other.x - self.y * other.y - self.z * other.z,
+        )
+    }
+
+    /// Creates a normalized quaternion representing a rotation of `angle_radians` around `axis`.
+    pub fn from_axis_angle(axis: &Vec3, angle_radians: f32) -> Self {
+        let unit = axis.normalized_or(Vec3::UP);
+        let (sin_half, cos_half) = (angle_radians * 0.5).sin_cos();
+        Self::new(
+            unit.x * sin_half,
+            unit.y * sin_half,
+            unit.z * sin_half,
+            cos_half,
+        )
+        .normalized()
+    }
+
+    /// Creates a quaternion from intrinsic `YXZ` Euler angles `(yaw, pitch, roll)` in radians:
+    /// `yaw` around `+Y`, then `pitch` around `+X`, then `roll` around `+Z`.
+    pub fn from_euler_yxz(yaw: f32, pitch: f32, roll: f32) -> Self {
+        let qy = Self::from_axis_angle(&Vec3::UP, yaw);
+        let qx = Self::from_axis_angle(&Vec3::new(1.0, 0.0, 0.0), pitch);
+        let qz = Self::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), roll);
+        qy.mul(&qx).mul(&qz).normalized()
+    }
+
+    /// Extracts `(yaw, pitch, roll)` Euler angles in radians using the `YXZ` convention.
+    pub fn to_euler_yxz(&self) -> (f32, f32, f32) {
+        let q = self.normalized();
+        let sin_pitch = (-2.0 * (q.y * q.z - q.w * q.x)).clamp(-1.0, 1.0);
+        let pitch = sin_pitch.asin();
+
+        if sin_pitch.abs() > 0.9999 {
+            let r20 = 2.0 * (q.x * q.z - q.w * q.y);
+            let r00 = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+            let yaw = (-r20).atan2(r00);
+            (yaw, pitch, 0.0)
+        } else {
+            let r02 = 2.0 * (q.x * q.z + q.w * q.y);
+            let r22 = 1.0 - 2.0 * (q.x * q.x + q.y * q.y);
+            let yaw = r02.atan2(r22);
+
+            let r10 = 2.0 * (q.x * q.y + q.w * q.z);
+            let r11 = 1.0 - 2.0 * (q.x * q.x + q.z * q.z);
+            let roll = r10.atan2(r11);
+
+            (yaw, pitch, roll)
+        }
+    }
+
     /// Computes a rotation aligning the local `+Y` (up) axis onto `normal`.
     ///
     /// Useful for orienting surface decals, blemishes, or upright props flush against any face.
@@ -147,5 +203,24 @@ mod tests {
         let down_q = Quaternion::align_up_to(&Vec3::new(0.0, -1.0, 0.0));
         let down = down_q.rotate_vec(&Vec3::UP);
         assert!((down.y + 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn quaternion_euler_yxz_roundtrips_and_composes() {
+        let yaw = 0.7;
+        let pitch = -0.35;
+        let roll = 0.5;
+        let q = Quaternion::from_euler_yxz(yaw, pitch, roll);
+        let (ry, rp, rr) = q.to_euler_yxz();
+        assert!((ry - yaw).abs() < 1e-5);
+        assert!((rp - pitch).abs() < 1e-5);
+        assert!((rr - roll).abs() < 1e-5);
+
+        // Gimbal lock near +90 deg pitch should preserve transformed forward/right vectors.
+        let lock_q = Quaternion::from_euler_yxz(1.1, std::f32::consts::FRAC_PI_2, 0.0);
+        let (ly, lp, lr) = lock_q.to_euler_yxz();
+        let rebuilt = Quaternion::from_euler_yxz(ly, lp, lr);
+        let sample = Vec3::new(0.3, 0.7, -0.5);
+        assert!(lock_q.rotate_vec(&sample).distance_to(&rebuilt.rotate_vec(&sample)) < 1e-4);
     }
 }

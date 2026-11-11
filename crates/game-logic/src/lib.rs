@@ -13,8 +13,9 @@ pub mod vitals;
 pub use level::{
     LEVEL_WORLD_SCHEMA_VERSION, LevelColor, LevelDynamicObject, LevelMarker, LevelStaticObject,
     LevelTriggerVolume, LevelWorldSpec, SpawnedDynamicBody, SpawnedLevelWorld, SpawnedStaticObject,
-    SpawnedTrigger, TerrainFloorOptions, TerrainPreset, generate_heightfield_floor,
-    sample_heightfield_y, spawn_level_world,
+    SpawnedTrigger, TerrainFloorOptions, TerrainFootprintStats, TerrainPreset,
+    generate_heightfield_floor, sample_heightfield_y, shape_rotated_footprint_extents,
+    spawn_level_world,
 };
 pub use movement::{
     MovementConfig, MovementIntent, MovementState, step_character_movement, update_velocity,

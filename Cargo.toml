@@ -6,6 +6,7 @@ members = [
     "crates/game-api",
     "crates/game-logic",
     "crates/host-runtime",
+    "crates/floride-host-wasm",
     "examples/visual-demo",
 ]
 resolver = "3"
