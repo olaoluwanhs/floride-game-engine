@@ -1,9 +1,9 @@
 use game_types::{EntityId, Vec3};
 use macroquad::prelude::Color;
 use physics_api::{
-    CharacterDesc, DynamicBodyDesc, HeightFieldDesc, PhantomBehavior, PhantomColliderDesc,
-    PhysicsError, PhysicsHandle, PhysicsTransform, PhysicsWorld, PlaneHalfExtents, PrimitiveShape,
-    Quaternion, RayQuery, StaticColliderDesc,
+    CharacterDesc, CubicBezier3, DynamicBodyDesc, HeightFieldDesc, PhantomBehavior,
+    PhantomColliderDesc, PhysicsError, PhysicsHandle, PhysicsTransform, PhysicsWorld,
+    PlaneHalfExtents, PrimitiveShape, Quaternion, RayQuery, StaticColliderDesc,
 };
 use physics_rapier::RapierWorld;
 
@@ -49,6 +49,59 @@ pub struct RenderItem {
     pub color: Color,
 }
 
+/// Parameters and interactive multi-segment spline state for editing Bézier physics exhibits.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplineEditorState {
+    pub segments: Vec<CubicBezier3>,
+    pub half_width: f32,
+    pub half_thickness: f32,
+    pub radius: f32,
+    pub max_segment_len_m: f32,
+    pub max_tangent_angle_deg: f32,
+    pub selected_segment: usize,
+    pub selected_point: usize, // 0: P0, 1: P1, 2: P2, 3: P3
+}
+
+impl Default for SplineEditorState {
+    fn default() -> Self {
+        let p0 = [0.0, 0.0, -3.0];
+        let p1 = [0.0, 1.8, -1.0];
+        let p2 = [2.0, 1.8, 1.0];
+        let p3 = [2.5, 0.0, 3.0];
+        Self {
+            segments: vec![CubicBezier3::new(p0, p1, p2, p3)],
+            half_width: 1.0,
+            half_thickness: 0.15,
+            radius: 0.28,
+            max_segment_len_m: 0.5,
+            max_tangent_angle_deg: 10.0,
+            selected_segment: 0,
+            selected_point: 3,
+        }
+    }
+}
+
+pub type BezierParams = SplineEditorState;
+
+pub fn make_bezier_rect(state: &SplineEditorState) -> PrimitiveShape {
+    PrimitiveShape::BezierExtrudedRect {
+        segments: state.segments.clone(),
+        half_width: state.half_width,
+        half_thickness: state.half_thickness,
+        max_segment_len_m: state.max_segment_len_m,
+        max_tangent_angle_deg: state.max_tangent_angle_deg,
+    }
+}
+
+pub fn make_bezier_circle(state: &SplineEditorState) -> PrimitiveShape {
+    PrimitiveShape::BezierExtrudedCircle {
+        segments: state.segments.clone(),
+        radius: state.radius,
+        max_segment_len_m: state.max_segment_len_m,
+        max_tangent_angle_deg: state.max_tangent_angle_deg,
+    }
+}
+
 /// A raycast path to be drawn in the 3D scene for visual debugging and feedback.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RayVisual {
@@ -82,6 +135,7 @@ pub struct Scene {
     overlap_count: usize,
     phantom_ray_hit_count: usize,
     active_rays: Vec<RayVisual>,
+    bezier_params: BezierParams,
 }
 
 impl Scene {
@@ -137,13 +191,15 @@ impl Scene {
 
         // 3. Add phantom colliders demonstrating the three sensor modes:
         // A. OverlapSensor: Senses objects touching its volume (like a coin or doorway trigger).
+        // Positioned under one of the dropping dynamic exhibits (x = exhibit_x(1) at z = 1.5) so that
+        // the falling dynamic body passes through or lands in the sensor volume.
         add_phantom(
             physics,
             &mut objects,
             "Overlap sensor",
             80,
             PrimitiveShape::Sphere { radius: 1.0 },
-            transform(-6.0, 2.0, 1.5),
+            transform(exhibit_x(1), 2.0, 1.5),
             PhantomBehavior::OverlapSensor,
             color(0.34, 0.90, 0.60, 0.34),
         )?;
@@ -368,6 +424,7 @@ impl Scene {
             overlap_count: 0,
             phantom_ray_hit_count: 0,
             active_rays: Vec::new(),
+            bezier_params: BezierParams::default(),
         })
     }
 
@@ -625,6 +682,107 @@ impl Scene {
             ),
         ]
     }
+
+    /// Returns the current parameters and multi-segment spline state for Bézier exhibits.
+    pub fn bezier_params(&self) -> &SplineEditorState {
+        &self.bezier_params
+    }
+
+    /// Returns a mutable reference to the multi-segment spline state.
+    pub fn bezier_params_mut(&mut self) -> &mut SplineEditorState {
+        &mut self.bezier_params
+    }
+
+    /// Returns the world transform of the Bézier ramp exhibit.
+    pub fn bezier_ramp_transform(&self) -> Option<PhysicsTransform> {
+        self.objects
+            .iter()
+            .find(|o| o.label == "Bezier ramp" && matches!(o.kind, ObjectKind::Static))
+            .map(|o| o.transform)
+    }
+
+    /// Dynamically updates the Bézier exhibits (both static and dynamic) with new parameters from the UI.
+    pub fn update_bezier_shapes(&mut self, state: SplineEditorState) -> Result<(), String> {
+        self.bezier_params = state;
+        let new_rect_shape = make_bezier_rect(&self.bezier_params);
+        let new_circle_shape = make_bezier_circle(&self.bezier_params);
+
+        for object in &mut self.objects {
+            match object.label {
+                "Bezier ramp" => {
+                    object.shape = new_rect_shape.clone();
+                    if matches!(object.kind, ObjectKind::Static) {
+                        self.physics
+                            .remove_static_collider(object.handle)
+                            .map_err(display_error)?;
+                        object.handle = self
+                            .physics
+                            .create_static_collider(&StaticColliderDesc {
+                                entity_id: None,
+                                transform: object.transform,
+                                shape: new_rect_shape.clone(),
+                            })
+                            .map_err(display_error)?;
+                    }
+                }
+                "Bezier pipe" => {
+                    object.shape = new_circle_shape.clone();
+                    if matches!(object.kind, ObjectKind::Static) {
+                        self.physics
+                            .remove_static_collider(object.handle)
+                            .map_err(display_error)?;
+                        object.handle = self
+                            .physics
+                            .create_static_collider(&StaticColliderDesc {
+                                entity_id: None,
+                                transform: object.transform,
+                                shape: new_circle_shape.clone(),
+                            })
+                            .map_err(display_error)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Teleports the player character directly in front of the Bézier ramp exhibit.
+    pub fn teleport_player(&mut self, target_position: Vec3) -> Result<(), String> {
+        let character_shape = PrimitiveShape::Capsule {
+            radius: 0.45,
+            half_height: 0.55,
+        };
+        self.physics
+            .remove_character(self.character_handle)
+            .map_err(display_error)?;
+        self.character_handle = self
+            .physics
+            .create_character(&CharacterDesc {
+                entity_id: EntityId::new(CHARACTER_ENTITY),
+                position: target_position,
+                shape: character_shape.clone(),
+                max_slope_angle_radians: std::f32::consts::FRAC_PI_4,
+                step_height: 0.25,
+            })
+            .map_err(display_error)?;
+
+        for obj in &mut self.objects {
+            if matches!(obj.kind, ObjectKind::Character) {
+                obj.handle = self.character_handle;
+                obj.transform.position = target_position;
+            }
+        }
+        self.vertical_velocity = 0.0;
+        self.is_grounded = false;
+        Ok(())
+    }
+
+    /// Returns the world position of the player character.
+    pub fn player_position(&self) -> Result<Vec3, String> {
+        let tf = self.physics.body_transform(self.character_handle).map_err(display_error)?;
+        Ok(tf.position)
+    }
 }
 
 /// Helper function providing a catalog of primitive shapes to showcase in the demo.
@@ -677,6 +835,14 @@ fn example_shapes() -> Vec<(&'static str, PrimitiveShape)> {
                 cell_size_z: 0.7,
                 thickness: Some(0.25),
             }),
+        ),
+        (
+            "Bezier ramp",
+            make_bezier_rect(&BezierParams::default()),
+        ),
+        (
+            "Bezier pipe",
+            make_bezier_circle(&BezierParams::default()),
         ),
     ]
 }
@@ -785,7 +951,7 @@ fn add_phantom(
 
 /// Computes the X coordinate spacing for the row of shape exhibits.
 fn exhibit_x(index: usize) -> f32 {
-    (index as f32 - 3.0) * 3.0
+    (index as f32 - 4.0) * 2.8
 }
 
 /// Helper creating a `PhysicsTransform` with identity (unrotated) orientation.

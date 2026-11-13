@@ -1,6 +1,7 @@
 use game_types::Vec3;
 use serde::{Deserialize, Serialize};
 
+use crate::bezier::CubicBezier3;
 use crate::height_field_type::HeightFieldDesc;
 
 /// Half-width and half-depth for a finite plane.
@@ -72,4 +73,34 @@ pub enum PrimitiveShape {
     /// characters, or phantoms through this shared shape type. The physics
     /// adapter decides which uses its engine supports.
     HeightField(HeightFieldDesc),
+
+    /// A rectangular cross-section swept along a sequence of cubic Bézier splines.
+    ///
+    /// Useful for bridges, highways, ramps, compound curved walls, and walkways.
+    BezierExtrudedRect {
+        /// Sequence of connected 3D cubic Bézier segments in local shape space.
+        segments: Vec<CubicBezier3>,
+        /// Half-width of the rectangular cross-section in meters (local horizontal extent).
+        half_width: f32,
+        /// Half-thickness of the rectangular cross-section in meters (local vertical extent).
+        half_thickness: f32,
+        /// Target arc-length per physics collider segment in meters.
+        max_segment_len_m: f32,
+        /// Maximum angular deviation in degrees between adjacent tangents before subdividing.
+        max_tangent_angle_deg: f32,
+    },
+
+    /// A circular cross-section swept along a sequence of cubic Bézier splines.
+    ///
+    /// Useful for curved pipes, industrial conduits, railings, and suspension cables.
+    BezierExtrudedCircle {
+        /// Sequence of connected 3D cubic Bézier segments in local shape space.
+        segments: Vec<CubicBezier3>,
+        /// Radius of the circular cross-section in meters.
+        radius: f32,
+        /// Target arc-length per physics collider segment in meters.
+        max_segment_len_m: f32,
+        /// Maximum angular deviation in degrees between adjacent tangents before subdividing.
+        max_tangent_angle_deg: f32,
+    },
 }

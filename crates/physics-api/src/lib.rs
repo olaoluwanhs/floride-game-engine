@@ -3,6 +3,7 @@
 //! This crate describes the physics operations needed by the game. It does not
 //! perform physics itself and does not depend on Rapier or another engine.
 
+pub mod bezier;
 mod error;
 mod height_field_type;
 mod phantom_types;
@@ -11,6 +12,7 @@ mod primitive_shape;
 mod shared_types;
 mod world;
 
+pub use bezier::{adaptive_sample, bezier_point, bezier_tangent, BezierSample, CubicBezier3};
 pub use error::PhysicsError;
 pub use height_field_type::HeightFieldDesc;
 pub use phantom_types::{PhantomBehavior, PhantomColliderDesc, PhantomOverlap, PhantomRayHit};

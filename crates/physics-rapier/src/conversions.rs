@@ -2,7 +2,8 @@ use std::f32::consts::TAU;
 
 use game_types::Vec3;
 use physics_api::{
-    HeightFieldDesc, PhysicsError, PhysicsTransform, PlaneHalfExtents, PrimitiveShape, Quaternion,
+    CubicBezier3, HeightFieldDesc, PhysicsError, PhysicsTransform, PlaneHalfExtents, PrimitiveShape,
+    Quaternion,
 };
 use rapier3d::prelude::{Array2, Pose, Rotation, SharedShape, Vector};
 
@@ -113,6 +114,49 @@ pub(crate) fn shape_and_offset(
             (torus_shape(*major_radius, *tube_radius), Vector::ZERO)
         }
         PrimitiveShape::HeightField(description) => heightfield_shape(description)?,
+        PrimitiveShape::BezierExtrudedRect {
+            segments,
+            half_width,
+            half_thickness,
+            max_segment_len_m,
+            max_tangent_angle_deg,
+        } => {
+            validate_positive(*half_width, "bezier rect half-width")?;
+            validate_positive(*half_thickness, "bezier rect half-thickness")?;
+            validate_positive(*max_segment_len_m, "bezier rect max segment length")?;
+            validate_positive(*max_tangent_angle_deg, "bezier rect max tangent angle")?;
+            if segments.is_empty() {
+                return Err(invalid("bezier rect must contain at least one segment"));
+            }
+            let shape = bezier_rect_shape(
+                segments,
+                *half_width,
+                *half_thickness,
+                *max_segment_len_m,
+                *max_tangent_angle_deg,
+            )?;
+            (shape, Vector::ZERO)
+        }
+        PrimitiveShape::BezierExtrudedCircle {
+            segments,
+            radius,
+            max_segment_len_m,
+            max_tangent_angle_deg,
+        } => {
+            validate_positive(*radius, "bezier circle radius")?;
+            validate_positive(*max_segment_len_m, "bezier circle max segment length")?;
+            validate_positive(*max_tangent_angle_deg, "bezier circle max tangent angle")?;
+            if segments.is_empty() {
+                return Err(invalid("bezier circle must contain at least one segment"));
+            }
+            let shape = bezier_circle_shape(
+                segments,
+                *radius,
+                *max_segment_len_m,
+                *max_tangent_angle_deg,
+            )?;
+            (shape, Vector::ZERO)
+        }
     };
     Ok(shape_result)
 }
@@ -297,6 +341,92 @@ fn torus_shape(major_radius: f32, tube_radius: f32) -> SharedShape {
         ));
     }
     SharedShape::compound(parts)
+}
+
+fn bezier_rect_shape(
+    segments: &[CubicBezier3],
+    half_width: f32,
+    half_thickness: f32,
+    max_segment_len_m: f32,
+    max_tangent_angle_deg: f32,
+) -> Result<SharedShape, PhysicsError> {
+    use physics_api::bezier::{adaptive_sample, tangent_to_rotation};
+
+    let max_angle_rad = max_tangent_angle_deg.to_radians();
+    let mut parts: Vec<(Pose, SharedShape)> = Vec::new();
+    const OVERLAP_M: f32 = 0.04;
+
+    for curve in segments {
+        let samples = adaptive_sample(curve, max_segment_len_m, max_angle_rad);
+        for window in samples.windows(2) {
+            let start = &window[0];
+            let end = &window[1];
+            let delta = end.position.subtract(&start.position);
+            let chord_len = delta.length();
+            if chord_len < 1e-4 {
+                continue;
+            }
+            let center = start.position.add(&end.position).scale(0.5);
+            let tangent = delta.normalized_or(start.tangent);
+            let rot = tangent_to_rotation(&tangent);
+            let half_len = chord_len * 0.5 + OVERLAP_M * 0.5;
+
+            let pose = to_pose(&PhysicsTransform::new(center, rot));
+            let cuboid = SharedShape::cuboid(half_width, half_thickness, half_len);
+            parts.push((pose, cuboid));
+        }
+    }
+
+    if parts.is_empty() {
+        return Err(invalid("bezier rect generated no valid collider segments"));
+    }
+    if parts.len() > 1000 {
+        return Err(invalid(format!(
+            "bezier rect generated too many colliders ({}), cap is 1000",
+            parts.len()
+        )));
+    }
+
+    Ok(SharedShape::compound(parts))
+}
+
+fn bezier_circle_shape(
+    segments: &[CubicBezier3],
+    radius: f32,
+    max_segment_len_m: f32,
+    max_tangent_angle_deg: f32,
+) -> Result<SharedShape, PhysicsError> {
+    use physics_api::bezier::adaptive_sample;
+
+    let max_angle_rad = max_tangent_angle_deg.to_radians();
+    let mut parts: Vec<(Pose, SharedShape)> = Vec::new();
+
+    for curve in segments {
+        let samples = adaptive_sample(curve, max_segment_len_m, max_angle_rad);
+        for window in samples.windows(2) {
+            let start = &window[0];
+            let end = &window[1];
+            let p0 = to_vector(&start.position);
+            let p1 = to_vector(&end.position);
+            if (p1 - p0).length() < 1e-4 {
+                continue;
+            }
+            let capsule = SharedShape::capsule(p0, p1, radius);
+            parts.push((Pose::IDENTITY, capsule));
+        }
+    }
+
+    if parts.is_empty() {
+        return Err(invalid("bezier circle generated no valid collider segments"));
+    }
+    if parts.len() > 1000 {
+        return Err(invalid(format!(
+            "bezier circle generated too many colliders ({}), cap is 1000",
+            parts.len()
+        )));
+    }
+
+    Ok(SharedShape::compound(parts))
 }
 
 fn validate_plane_extents(extents: &PlaneHalfExtents) -> Result<(), PhysicsError> {

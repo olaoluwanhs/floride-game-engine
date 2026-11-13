@@ -13,7 +13,7 @@ use physics_api::{
 use serde::{Deserialize, Serialize};
 
 /// Current schema version for [`LevelWorldSpec`].
-pub const LEVEL_WORLD_SCHEMA_VERSION: u32 = 1;
+pub const LEVEL_WORLD_SCHEMA_VERSION: u32 = 2;
 
 /// Normalized RGBA color tint used for authoring and visualization metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -61,6 +61,9 @@ pub struct LevelStaticObject {
     /// Suggested editor/visualizer color tint.
     #[serde(default)]
     pub color: LevelColor,
+    /// Optional asset key used by visual renderers (e.g. R3F) to load high-detail 3D meshes.
+    #[serde(default)]
+    pub visual_key: Option<String>,
 }
 
 /// A movable physical prop in the level, such as a wooden crate or heavy barrel.
@@ -83,6 +86,9 @@ pub struct LevelDynamicObject {
     /// Suggested editor/visualizer color tint.
     #[serde(default)]
     pub color: LevelColor,
+    /// Optional asset key used by visual renderers (e.g. R3F) to load high-detail 3D meshes.
+    #[serde(default)]
+    pub visual_key: Option<String>,
 }
 
 /// A non-blocking sensor or raycast volume placed in the world.
@@ -565,6 +571,35 @@ pub fn shape_rotated_footprint_extents(
                 tube_r * axis.z.abs() + ring_r * (1.0 - axis.z * axis.z).max(0.0).sqrt(),
             )
         }
+        PrimitiveShape::BezierExtrudedRect {
+            half_width,
+            segments,
+            ..
+        } => {
+            // Approximate footprint from bounds of curve endpoints + cross section
+            let mut max_ext_x = *half_width;
+            let mut max_ext_z = *half_width;
+            for seg in segments {
+                for pt in [seg.p0, seg.p3] {
+                    max_ext_x = max_ext_x.max(pt[0].abs() + *half_width);
+                    max_ext_z = max_ext_z.max(pt[2].abs() + *half_width);
+                }
+            }
+            (max_ext_x, max_ext_z)
+        }
+        PrimitiveShape::BezierExtrudedCircle {
+            radius, segments, ..
+        } => {
+            let mut max_ext_x = *radius;
+            let mut max_ext_z = *radius;
+            for seg in segments {
+                for pt in [seg.p0, seg.p3] {
+                    max_ext_x = max_ext_x.max(pt[0].abs() + *radius);
+                    max_ext_z = max_ext_z.max(pt[2].abs() + *radius);
+                }
+            }
+            (max_ext_x, max_ext_z)
+        }
         _ => (0.5, 0.5),
     }
 }
@@ -778,6 +813,7 @@ pub fn generate_heightfield_floor(
             -depth * 0.5,
         )),
         color: options.color,
+        visual_key: None,
     }
 }
 
@@ -1087,6 +1123,7 @@ mod tests {
                 },
                 transform: PhysicsTransform::IDENTITY,
                 color: LevelColor::rgb(0.3, 0.35, 0.4),
+                visual_key: None,
             }],
             dynamic_objects: vec![LevelDynamicObject {
                 id: EntityId::new(10),
@@ -1099,6 +1136,7 @@ mod tests {
                 friction: 0.7,
                 elasticity: 0.1,
                 color: LevelColor::rgb(0.65, 0.45, 0.25),
+                visual_key: None,
             }],
             triggers: vec![LevelTriggerVolume {
                 id: EntityId::new(20),
@@ -1179,6 +1217,7 @@ mod tests {
             }),
             transform: PhysicsTransform::IDENTITY,
             color: LevelColor::default(),
+            visual_key: None,
         };
         world_spec.static_objects = vec![custom_hf];
         // u=0.25, v=0.25 -> u+v <= 1 -> 0 + 0.25*(2-0) + 0.25*(4-0) = 1.5
@@ -1214,6 +1253,7 @@ mod tests {
                 }),
                 transform: PhysicsTransform::IDENTITY,
                 color: LevelColor::default(),
+                visual_key: None,
             }],
             ..LevelWorldSpec::default()
         };
@@ -1268,6 +1308,7 @@ mod tests {
                 }),
                 transform: PhysicsTransform::IDENTITY,
                 color: LevelColor::default(),
+                visual_key: None,
             }],
             ..LevelWorldSpec::default()
         };
@@ -1286,6 +1327,7 @@ mod tests {
             },
             transform: PhysicsTransform::from_position(Vec3::new(4.0, 0.0, 4.0)),
             color: LevelColor::default(),
+            visual_key: None,
         };
         world.seat_static_upright(&mut cover, 2.0);
         assert_eq!(cover.transform.rotation, Quaternion::IDENTITY);
@@ -1341,6 +1383,7 @@ mod tests {
                 }),
                 transform: PhysicsTransform::IDENTITY,
                 color: LevelColor::default(),
+                visual_key: None,
             }],
             ..LevelWorldSpec::default()
         };
@@ -1356,6 +1399,7 @@ mod tests {
             },
             transform: PhysicsTransform::new(Vec3::new(4.0, 0.0, 4.0), yaw_90),
             color: LevelColor::default(),
+            visual_key: None,
         };
         world.seat_static_upright(&mut rotated_wall, 2.0);
         let (ry, rp, rr) = rotated_wall.transform.rotation.to_euler_yxz();
@@ -1377,6 +1421,7 @@ mod tests {
             },
             transform: PhysicsTransform::new(Vec3::new(4.0, 0.0, 4.0), pitch_20),
             color: LevelColor::default(),
+            visual_key: None,
         };
         world.seat_static_upright(&mut pitched_ramp, 1.0);
         let (_, rp2, _) = pitched_ramp.transform.rotation.to_euler_yxz();

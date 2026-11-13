@@ -5,9 +5,11 @@ mod render;
 mod scene;
 
 use macroquad::prelude::{
-    BLACK, KeyCode, clear_background, get_frame_time, is_key_down, is_key_pressed, next_frame,
-    screen_width, set_default_camera,
+    clear_background, get_frame_time, is_key_down, is_key_pressed, next_frame, screen_width,
+    set_default_camera, vec2, KeyCode, BLACK,
 };
+use macroquad::ui::widgets::{Button, Window};
+use macroquad::ui::{hash, root_ui};
 
 use render::OrbitCamera;
 use scene::Scene;
@@ -88,9 +90,225 @@ async fn main() {
                     Err(error) => simulation_error = Some(error),
                 }
 
+                // Draw 3D Blender-style Bézier control polygon, knots, and tangent handles
+                if let Some(tf) = active_scene.bezier_ramp_transform() {
+                    let bz = active_scene.bezier_params();
+                    render::draw_bezier_spline_gizmos(
+                        &bz.segments,
+                        &tf,
+                        bz.selected_segment,
+                        bz.selected_point,
+                    );
+                }
+
                 // Switch back to 2D UI coordinates to draw the text overlay (HUD).
                 set_default_camera();
                 render::draw_hud(active_scene.status_lines(), screen_width());
+
+                // Interactive Blender-Style Bézier Spline Editor Window
+                let mut p = active_scene.bezier_params().clone();
+                let mut changed = false;
+                let mut teleport_ramp = false;
+                let mut focus_spline = is_key_pressed(KeyCode::F);
+                let mut focus_player = false;
+
+                Window::new(
+                    hash!("bezier_spline_editor"),
+                    vec2(screen_width() - 360.0, 10.0),
+                    vec2(350.0, 520.0),
+                )
+                .label("Bézier 3D Spline Editor (Blender-Style)")
+                .ui(&mut root_ui(), |ui| {
+                    ui.label(None, &format!("Spline Segments: {}", p.segments.len()));
+
+                    // Focus & Frame Viewport Buttons
+                    if Button::new("Focus Camera on Spline (F)").size(vec2(165.0, 22.0)).ui(ui) {
+                        focus_spline = true;
+                    }
+                    ui.same_line(175.0);
+                    if Button::new("Focus Player").size(vec2(150.0, 22.0)).ui(ui) {
+                        focus_player = true;
+                    }
+
+                    ui.separator();
+
+                    // Extrude or delete segments
+                    if Button::new("+ Extrude Segment (Chain Next)").size(vec2(165.0, 22.0)).ui(ui) {
+                        if let Some(last_seg) = p.segments.last().cloned() {
+                            let next_seg = last_seg.extrude_continuation(4.0);
+                            p.segments.push(next_seg);
+                            p.selected_segment = p.segments.len() - 1;
+                            p.selected_point = 3;
+                            changed = true;
+                        }
+                    }
+                    ui.same_line(175.0);
+                    if Button::new("- Delete Segment").size(vec2(150.0, 22.0)).ui(ui) {
+                        if p.segments.len() > 1 {
+                            p.segments.pop();
+                            p.selected_segment = p.selected_segment.min(p.segments.len() - 1);
+                            changed = true;
+                        }
+                    }
+
+                    ui.separator();
+
+                    // Segment and Point Selection
+                    if p.selected_segment >= p.segments.len() {
+                        p.selected_segment = 0;
+                    }
+
+                    let cur_seg_idx = p.selected_segment;
+                    ui.label(None, &format!("Selected: Segment #{}", cur_seg_idx + 1));
+                    for i in 0..p.segments.len() {
+                        let btn_label = format!("Seg {}", i + 1);
+                        if Button::new(btn_label.as_str())
+                            .size(vec2(60.0, 20.0))
+                            .selected(p.selected_segment == i)
+                            .ui(ui)
+                        {
+                            p.selected_segment = i;
+                        }
+                        if (i + 1) % 4 != 0 && i + 1 < p.segments.len() {
+                            ui.same_line(68.0 * ((i % 4) + 1) as f32);
+                        }
+                    }
+
+                    ui.label(None, "Active Point (Knots & Tangent Handles):");
+                    let pt_names = ["Knot P0 (Start)", "Handle P1 (Out)", "Handle P2 (In)", "Knot P3 (End)"];
+                    for (i, name) in pt_names.iter().enumerate() {
+                        if Button::new(*name)
+                            .size(vec2(155.0, 20.0))
+                            .selected(p.selected_point == i)
+                            .ui(ui)
+                        {
+                            p.selected_point = i;
+                        }
+                        if i % 2 == 0 {
+                            ui.same_line(165.0);
+                        }
+                    }
+
+                    ui.separator();
+
+                    // Full 3D Coordinate editing for the selected point
+                    let pt_idx = p.selected_point.min(3);
+                    let seg = &mut p.segments[cur_seg_idx];
+                    let pt_ref = match pt_idx {
+                        0 => &mut seg.p0,
+                        1 => &mut seg.p1,
+                        2 => &mut seg.p2,
+                        _ => &mut seg.p3,
+                    };
+
+                    ui.label(None, &format!("Move {} on ALL 3 AXES (X, Y, Z):", pt_names[pt_idx]));
+                    let mut px = pt_ref[0];
+                    let mut py = pt_ref[1];
+                    let mut pz = pt_ref[2];
+
+                    ui.slider(hash!("pt_x"), "X (Left/Right)", -15.0..15.0, &mut px);
+                    ui.slider(hash!("pt_y"), "Y (Up/Down)", -5.0..15.0, &mut py);
+                    ui.slider(hash!("pt_z"), "Z (Forward/Back)", -20.0..20.0, &mut pz);
+
+                    if (px - pt_ref[0]).abs() > 0.005 || (py - pt_ref[1]).abs() > 0.005 || (pz - pt_ref[2]).abs() > 0.005 {
+                        let delta_x = px - pt_ref[0];
+                        let delta_y = py - pt_ref[1];
+                        let delta_z = pz - pt_ref[2];
+                        pt_ref[0] = px;
+                        pt_ref[1] = py;
+                        pt_ref[2] = pz;
+
+                        // Continuity rule: If editing Knot P3 of segment i, sync Knot P0 of segment i+1
+                        if pt_idx == 3 && cur_seg_idx + 1 < p.segments.len() {
+                            p.segments[cur_seg_idx + 1].p0 = [px, py, pz];
+                            p.segments[cur_seg_idx + 1].p1[0] += delta_x;
+                            p.segments[cur_seg_idx + 1].p1[1] += delta_y;
+                            p.segments[cur_seg_idx + 1].p1[2] += delta_z;
+                        } else if pt_idx == 0 && cur_seg_idx > 0 {
+                            p.segments[cur_seg_idx - 1].p3 = [px, py, pz];
+                            p.segments[cur_seg_idx - 1].p2[0] += delta_x;
+                            p.segments[cur_seg_idx - 1].p2[1] += delta_y;
+                            p.segments[cur_seg_idx - 1].p2[2] += delta_z;
+                        }
+                        changed = true;
+                    }
+
+                    ui.separator();
+                    ui.label(None, "Cross-Section Extrusion Profile:");
+                    let mut hw = p.half_width;
+                    ui.slider(hash!("bz_w"), "Half Width (m)", 0.25..4.0, &mut hw);
+                    if (hw - p.half_width).abs() > 0.01 {
+                        p.half_width = hw;
+                        changed = true;
+                    }
+
+                    let mut hth = p.half_thickness;
+                    ui.slider(hash!("bz_th"), "Half Thick (m)", 0.05..1.0, &mut hth);
+                    if (hth - p.half_thickness).abs() > 0.01 {
+                        p.half_thickness = hth;
+                        changed = true;
+                    }
+
+                    let mut r = p.radius;
+                    ui.slider(hash!("bz_r"), "Pipe Radius (m)", 0.1..2.0, &mut r);
+                    if (r - p.radius).abs() > 0.01 {
+                        p.radius = r;
+                        changed = true;
+                    }
+
+                    ui.separator();
+                    if Button::new("Teleport Player to Start of Spline").size(vec2(320.0, 24.0)).ui(ui) {
+                        teleport_ramp = true;
+                    }
+                });
+
+                if changed {
+                    if let Err(error) = active_scene.update_bezier_shapes(p.clone()) {
+                        simulation_error = Some(error);
+                    }
+                } else if p.selected_segment != active_scene.bezier_params().selected_segment
+                    || p.selected_point != active_scene.bezier_params().selected_point
+                {
+                    active_scene.bezier_params_mut().selected_segment = p.selected_segment;
+                    active_scene.bezier_params_mut().selected_point = p.selected_point;
+                }
+
+                if teleport_ramp {
+                    if let Some(tf) = active_scene.bezier_ramp_transform() {
+                        let first_p0 = p.segments[0].p0;
+                        let target = game_types::Vec3::new(
+                            tf.position.x + first_p0[0],
+                            tf.position.y + first_p0[1] + 1.2,
+                            tf.position.z + first_p0[2] - 1.5,
+                        );
+                        if let Err(error) = active_scene.teleport_player(target) {
+                            simulation_error = Some(error);
+                        }
+                    }
+                }
+
+                if focus_spline {
+                    if let Some(tf) = active_scene.bezier_ramp_transform() {
+                        // Center camera on the midpoint of the active spline segment
+                        let cur_seg = &p.segments[p.selected_segment.min(p.segments.len() - 1)];
+                        let mid = cur_seg.point(0.5);
+                        camera.target = macroquad::prelude::vec3(
+                            tf.position.x + mid.x,
+                            tf.position.y + mid.y,
+                            tf.position.z + mid.z,
+                        );
+                        camera.settings.distance = 9.0;
+                        camera.pitch = 0.45;
+                    }
+                }
+
+                if focus_player {
+                    if let Ok(pos) = active_scene.player_position() {
+                        camera.target = macroquad::prelude::vec3(pos.x, pos.y + 0.8, pos.z);
+                        camera.settings.distance = 5.5;
+                        camera.pitch = 0.35;
+                    }
+                }
             }
         } else if let Some(error) = simulation_error.as_deref() {
             render::draw_error(error);
@@ -133,12 +351,13 @@ fn read_movement_input(camera_yaw: f32) -> game_types::Vec3 {
     }
 
     // Convert screen-relative WASD input into world-space coordinates based on camera yaw.
-    // `camera_yaw.sin_cos()` computes both sin(yaw) and cos(yaw) in a single CPU operation.
+    // In `render.rs`, camera forward is (sin_yaw, cos_yaw) and right is (-cos_yaw, sin_yaw).
+    // Pressing 'W' (+Z) moves along forward, and 'D' (+X) moves along right.
     let (sin_yaw, cos_yaw) = camera_yaw.sin_cos();
-    let forward_x = -sin_yaw;
-    let forward_z = -cos_yaw;
-    let right_x = cos_yaw;
-    let right_z = -sin_yaw;
+    let forward_x = sin_yaw;
+    let forward_z = cos_yaw;
+    let right_x = -cos_yaw;
+    let right_z = sin_yaw;
 
     // Combine forward and right vectors scaled by the player's movement input.
     game_types::Vec3::new(

@@ -1,8 +1,8 @@
 use game_types::{EntityId, Vec3};
 use physics_api::{
-    CharacterDesc, DynamicBodyDesc, HeightFieldDesc, PhantomBehavior, PhantomColliderDesc,
-    PhysicsTransform, PhysicsWorld, PlaneHalfExtents, PrimitiveShape, Quaternion, RayQuery,
-    StaticColliderDesc,
+    CharacterDesc, CubicBezier3, DynamicBodyDesc, HeightFieldDesc, PhantomBehavior,
+    PhantomColliderDesc, PhysicsTransform, PhysicsWorld, PlaneHalfExtents, PrimitiveShape,
+    Quaternion, RayQuery, StaticColliderDesc,
 };
 use physics_rapier::RapierWorld;
 
@@ -608,4 +608,114 @@ fn dynamic_body_entity_lookup_and_radius_query() {
     assert_eq!(nearby.len(), 1);
     assert_eq!(nearby[0].0, near_id);
     assert_eq!(nearby[0].1, near_handle);
+}
+
+#[test]
+fn bezier_rect_and_circle_colliders_spawn_and_support_raycasts_and_movement() {
+    let mut world = RapierWorld::new();
+
+    // Curved bridge ramp from (0, 0, 0) to (0, 4, 20)
+    let bridge_curve = CubicBezier3::new(
+        [0.0, 0.0, 0.0],
+        [0.0, 0.5, 6.0],
+        [0.0, 3.5, 14.0],
+        [0.0, 4.0, 20.0],
+    );
+
+    let bridge_id = EntityId::new(101);
+    world
+        .create_static_collider(&StaticColliderDesc {
+            entity_id: Some(bridge_id),
+            transform: PhysicsTransform::IDENTITY,
+            shape: PrimitiveShape::BezierExtrudedRect {
+                segments: vec![bridge_curve],
+                half_width: 3.0,
+                half_thickness: 0.4,
+                max_segment_len_m: 1.0,
+                max_tangent_angle_deg: 5.0,
+            },
+        })
+        .unwrap();
+
+    // Pipe loop over the bridge
+    let pipe_curve = CubicBezier3::new(
+        [-5.0, 6.0, 10.0],
+        [-2.0, 8.0, 10.0],
+        [2.0, 8.0, 10.0],
+        [5.0, 6.0, 10.0],
+    );
+    let pipe_id = EntityId::new(102);
+    world
+        .create_static_collider(&StaticColliderDesc {
+            entity_id: Some(pipe_id),
+            transform: PhysicsTransform::IDENTITY,
+            shape: PrimitiveShape::BezierExtrudedCircle {
+                segments: vec![pipe_curve],
+                radius: 0.5,
+                max_segment_len_m: 0.8,
+                max_tangent_angle_deg: 10.0,
+            },
+        })
+        .unwrap();
+
+    world.step(1.0 / 60.0).unwrap();
+
+    // 1. Raycast downward onto the bridge deck (below overhead pipe, z = 10, bridge deck at y ≈ 2.0)
+    let bridge_ray = world
+        .raycast(&RayQuery {
+            origin: Vec3::new(0.0, 5.0, 10.0),
+            direction: Vec3::new(0.0, -1.0, 0.0),
+            max_distance: 10.0,
+            ignored_entity: None,
+        })
+        .unwrap()
+        .expect("raycast should hit bridge deck");
+
+    assert_eq!(bridge_ray.entity_id, Some(bridge_id));
+    assert!((bridge_ray.point.y - 2.0).abs() < 1.0);
+    assert!(
+        bridge_ray.surface_normal.y > 0.8,
+        "normal should face upward"
+    );
+
+    // 2. Raycast against the overhead pipe (x = 0, z = 10, y should be around 7.5..8.5)
+    let pipe_ray = world
+        .raycast(&RayQuery {
+            origin: Vec3::new(0.0, 12.0, 10.0),
+            direction: Vec3::new(0.0, -1.0, 0.0),
+            max_distance: 10.0,
+            ignored_entity: None,
+        })
+        .unwrap()
+        .expect("raycast should hit overhead pipe");
+
+    assert_eq!(pipe_ray.entity_id, Some(pipe_id));
+    assert!(pipe_ray.point.y > 6.5 && pipe_ray.point.y < 8.5);
+
+    // 3. Character spawns at start of bridge and walks across the curve
+    let character = world
+        .create_character(&CharacterDesc {
+            entity_id: EntityId::new(99),
+            position: Vec3::new(0.0, 1.5, 1.0),
+            shape: PrimitiveShape::Capsule {
+                radius: 0.4,
+                half_height: 0.5,
+            },
+            max_slope_angle_radians: std::f32::consts::FRAC_PI_4,
+            step_height: 0.25,
+        })
+        .unwrap();
+
+    // Walk forward along +Z across multiple segments
+    for _ in 0..60 {
+        let res = world
+            .move_character(character, &Vec3::new(0.0, -0.05, 0.25))
+            .unwrap();
+        assert!(res.applied_displacement.z > 0.0 || res.is_grounded);
+        world.step(1.0 / 60.0).unwrap();
+    }
+
+    let end_tf = world.body_transform(character).unwrap();
+    assert!(end_tf.position.z > 8.0, "character should have advanced across bridge");
+    assert!(end_tf.position.y > 1.2, "character should stay elevated on bridge deck");
 }

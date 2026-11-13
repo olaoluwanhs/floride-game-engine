@@ -5,7 +5,7 @@ use macroquad::prelude::{
     draw_text, is_key_down, is_mouse_button_down, mouse_delta_position, mouse_wheel, set_camera,
     set_default_camera, vec3,
 };
-use physics_api::{HeightFieldDesc, PhysicsTransform, PrimitiveShape};
+use physics_api::{CubicBezier3, HeightFieldDesc, PhysicsTransform, PrimitiveShape};
 
 use crate::scene::{RayVisual, RenderItem};
 
@@ -382,6 +382,34 @@ fn shape_mesh(shape: &PrimitiveShape, transform: &PhysicsTransform, color: Color
             tube_radius,
         } => builder.add_torus(*major_radius, *tube_radius),
         PrimitiveShape::HeightField(description) => builder.add_heightfield(description),
+        PrimitiveShape::BezierExtrudedRect {
+            segments,
+            half_width,
+            half_thickness,
+            max_segment_len_m,
+            max_tangent_angle_deg,
+        } => {
+            builder.add_bezier_rect(
+                segments,
+                *half_width,
+                *half_thickness,
+                *max_segment_len_m,
+                *max_tangent_angle_deg,
+            );
+        }
+        PrimitiveShape::BezierExtrudedCircle {
+            segments,
+            radius,
+            max_segment_len_m,
+            max_tangent_angle_deg,
+        } => {
+            builder.add_bezier_circle(
+                segments,
+                *radius,
+                *max_segment_len_m,
+                *max_tangent_angle_deg,
+            );
+        }
     }
     builder.finish()
 }
@@ -658,6 +686,114 @@ impl<'a> MeshBuilder<'a> {
             texture: None,
         }
     }
+
+    fn add_bezier_rect(
+        &mut self,
+        segments: &[CubicBezier3],
+        half_width: f32,
+        half_thickness: f32,
+        max_segment_len_m: f32,
+        max_tangent_angle_deg: f32,
+    ) {
+        use physics_api::bezier::{adaptive_sample, tangent_to_rotation};
+        let max_angle_rad = max_tangent_angle_deg.to_radians();
+
+        for curve in segments {
+            let samples = adaptive_sample(curve, max_segment_len_m, max_angle_rad);
+            for window in samples.windows(2) {
+                let (curr, next) = (&window[0], &window[1]);
+                let curr_rot_q = tangent_to_rotation(&curr.tangent);
+                let next_rot_q = tangent_to_rotation(&next.tangent);
+                let curr_rot = Quat::from_xyzw(
+                    curr_rot_q.x,
+                    curr_rot_q.y,
+                    curr_rot_q.z,
+                    curr_rot_q.w,
+                )
+                .normalize();
+                let next_rot = Quat::from_xyzw(
+                    next_rot_q.x,
+                    next_rot_q.y,
+                    next_rot_q.z,
+                    next_rot_q.w,
+                )
+                .normalize();
+
+                let right_curr = curr_rot * vec3(half_width, 0.0, 0.0);
+                let up_curr = curr_rot * vec3(0.0, half_thickness, 0.0);
+                let right_next = next_rot * vec3(half_width, 0.0, 0.0);
+                let up_next = next_rot * vec3(0.0, half_thickness, 0.0);
+
+                let cp = to_macroquad(curr.position);
+                let np = to_macroquad(next.position);
+
+                let c_tl = cp - right_curr + up_curr;
+                let c_tr = cp + right_curr + up_curr;
+                let c_br = cp + right_curr - up_curr;
+                let c_bl = cp - right_curr - up_curr;
+
+                let n_tl = np - right_next + up_next;
+                let n_tr = np + right_next + up_next;
+                let n_br = np + right_next - up_next;
+                let n_bl = np - right_next - up_next;
+
+                self.add_quad(c_tl, c_tr, n_tr, n_tl);
+                self.add_quad(c_bl, n_bl, n_br, c_br);
+                self.add_quad(c_tl, n_tl, n_bl, c_bl);
+                self.add_quad(c_tr, c_br, n_br, n_tr);
+            }
+        }
+    }
+
+    fn add_bezier_circle(
+        &mut self,
+        segments: &[CubicBezier3],
+        radius: f32,
+        max_segment_len_m: f32,
+        max_tangent_angle_deg: f32,
+    ) {
+        use physics_api::bezier::{adaptive_sample, tangent_to_rotation};
+        let max_angle_rad = max_tangent_angle_deg.to_radians();
+
+        for curve in segments {
+            let samples = adaptive_sample(curve, max_segment_len_m, max_angle_rad);
+            for window in samples.windows(2) {
+                let (curr, next) = (&window[0], &window[1]);
+                let curr_rot_q = tangent_to_rotation(&curr.tangent);
+                let next_rot_q = tangent_to_rotation(&next.tangent);
+                let curr_rot = Quat::from_xyzw(
+                    curr_rot_q.x,
+                    curr_rot_q.y,
+                    curr_rot_q.z,
+                    curr_rot_q.w,
+                )
+                .normalize();
+                let next_rot = Quat::from_xyzw(
+                    next_rot_q.x,
+                    next_rot_q.y,
+                    next_rot_q.z,
+                    next_rot_q.w,
+                )
+                .normalize();
+
+                let cp = to_macroquad(curr.position);
+                let np = to_macroquad(next.position);
+
+                const SIDES: usize = 12;
+                for i in 0..SIDES {
+                    let a0 = std::f32::consts::TAU * i as f32 / SIDES as f32;
+                    let a1 = std::f32::consts::TAU * (i + 1) as f32 / SIDES as f32;
+
+                    let c0 = cp + curr_rot * vec3(radius * a0.cos(), radius * a0.sin(), 0.0);
+                    let c1 = cp + curr_rot * vec3(radius * a1.cos(), radius * a1.sin(), 0.0);
+                    let n0 = np + next_rot * vec3(radius * a0.cos(), radius * a0.sin(), 0.0);
+                    let n1 = np + next_rot * vec3(radius * a1.cos(), radius * a1.sin(), 0.0);
+
+                    self.add_quad(c0, c1, n1, n0);
+                }
+            }
+        }
+    }
 }
 
 fn draw_heightfield_chunked(
@@ -698,4 +834,57 @@ fn to_macroquad(vector: GameVec3) -> Vec3 {
 
 fn draw_grid(slices: u32, spacing: f32, axes_color: Color, other_color: Color) {
     macroquad::models::draw_grid(slices, spacing, axes_color, other_color);
+}
+
+/// Renders 3D Bézier spline control points, tangent handle bars, and anchor knots in world space.
+///
+/// Just like in Blender:
+/// - Anchor Knots (P0, P3) are drawn as yellow wireframe spheres.
+/// - Tangent Handles (P1, P2) are drawn as cyan/orange diamond markers.
+/// - Handle bars are drawn as colored dashed lines connecting the knot to its tangent handles.
+/// - The currently selected point is highlighted in pulsing bright green.
+pub fn draw_bezier_spline_gizmos(
+    segments: &[CubicBezier3],
+    transform: &PhysicsTransform,
+    selected_seg: usize,
+    selected_point_idx: usize, // 0: P0, 1: P1, 2: P2, 3: P3
+) {
+    use macroquad::models::{draw_line_3d, draw_sphere_wires};
+    use macroquad::prelude::{GOLD, GREEN, ORANGE, SKYBLUE};
+
+    let world_rot = Quat::from_xyzw(
+        transform.rotation.x,
+        transform.rotation.y,
+        transform.rotation.z,
+        transform.rotation.w,
+    );
+    let world_pos = to_macroquad(transform.position);
+
+    let to_world = |pt: [f32; 3]| -> Vec3 {
+        let local = vec3(pt[0], pt[1], pt[2]);
+        world_pos + world_rot * local
+    };
+
+    for (seg_idx, curve) in segments.iter().enumerate() {
+        let p0 = to_world(curve.p0);
+        let p1 = to_world(curve.p1);
+        let p2 = to_world(curve.p2);
+        let p3 = to_world(curve.p3);
+
+        // Draw handle bars (P0 -> P1, and P3 -> P2)
+        draw_line_3d(p0, p1, SKYBLUE);
+        draw_line_3d(p3, p2, ORANGE);
+
+        // Draw knots (P0, P3)
+        let p0_selected = seg_idx == selected_seg && selected_point_idx == 0;
+        let p3_selected = seg_idx == selected_seg && selected_point_idx == 3;
+        draw_sphere_wires(p0, if p0_selected { 0.22 } else { 0.14 }, None, if p0_selected { GREEN } else { GOLD });
+        draw_sphere_wires(p3, if p3_selected { 0.22 } else { 0.14 }, None, if p3_selected { GREEN } else { GOLD });
+
+        // Draw handles (P1, P2)
+        let p1_selected = seg_idx == selected_seg && selected_point_idx == 1;
+        let p2_selected = seg_idx == selected_seg && selected_point_idx == 2;
+        draw_sphere_wires(p1, if p1_selected { 0.18 } else { 0.10 }, None, if p1_selected { GREEN } else { SKYBLUE });
+        draw_sphere_wires(p2, if p2_selected { 0.18 } else { 0.10 }, None, if p2_selected { GREEN } else { ORANGE });
+    }
 }
